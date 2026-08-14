@@ -16,9 +16,27 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from .migrations import apply_all
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+-- One row per person using StudyLink. `apple_sub` is the stable subject claim
+-- from Sign in with Apple; it is null for locally-created users so the CLI and
+-- the demo seeder work without an auth round trip.
+CREATE TABLE IF NOT EXISTS users (
+    id         INTEGER PRIMARY KEY,
+    apple_sub  TEXT UNIQUE,
+    email      TEXT,
+    display_name TEXT,
+    created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS courses (
     id          INTEGER PRIMARY KEY,
@@ -114,6 +132,8 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    # SCHEMA creates a fresh database; migrations bring an existing one forward.
+    apply_all(conn)
     return conn
 
 
@@ -142,5 +162,6 @@ def reset(conn: sqlite3.Connection) -> None:
             "assignments",
             "courses",
             "sync_log",
+            "users",
         ):
             conn.execute(f"DELETE FROM {table}")
