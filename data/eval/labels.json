@@ -1,0 +1,125 @@
+{
+  "description": "Hand-labelled note<->assignment pairs used to measure retrieval quality. relevant=true means the note SHOULD be retrieved for that assignment; relevant=false means it is a plausible-looking distractor that should NOT be.",
+  "pairs": [
+    {
+      "assignment_name": "Problem Set 3: Gradient Descent and Regularization",
+      "note_title": "Lecture 5 - Gradient Descent",
+      "relevant": true,
+      "rationale": "Directly covers the learning-rate comparison the problem set asks for."
+    },
+    {
+      "assignment_name": "Problem Set 3: Gradient Descent and Regularization",
+      "note_title": "Lecture 6 - Regularization: L1 vs L2",
+      "relevant": true,
+      "rationale": "Covers the L1 sparsity vs L2 shrinkage explanation and the lambda sweep."
+    },
+    {
+      "assignment_name": "Problem Set 3: Gradient Descent and Regularization",
+      "note_title": "Lecture 2 - Linear algebra refresher",
+      "relevant": false,
+      "rationale": "Mentions L1 and L2 norms but gives no help with the actual task."
+    },
+    {
+      "assignment_name": "Problem Set 3: Gradient Descent and Regularization",
+      "note_title": "Lecture 9 - Decision Trees",
+      "relevant": false,
+      "rationale": "Same course, unrelated model family."
+    },
+    {
+      "assignment_name": "Project Milestone 1: Dataset and Baseline Model",
+      "note_title": "Section notes - Train/validation/test splits and baselines",
+      "relevant": true,
+      "rationale": "Covers both required elements: the split rationale and what a baseline establishes."
+    },
+    {
+      "assignment_name": "Project Milestone 1: Dataset and Baseline Model",
+      "note_title": "Office hours - project dataset selection",
+      "relevant": true,
+      "rationale": "Directly about justifying the dataset choice for this milestone."
+    },
+    {
+      "assignment_name": "Project Milestone 1: Dataset and Baseline Model",
+      "note_title": "Lecture 5 - Gradient Descent",
+      "relevant": false,
+      "rationale": "Optimisation detail, not relevant to dataset selection or splits."
+    },
+    {
+      "assignment_name": "Quiz 2 Review: Decision Trees and Ensembles",
+      "note_title": "Lecture 9 - Decision Trees",
+      "relevant": true,
+      "rationale": "Information gain, Gini, and pruning are all named in the quiz scope."
+    },
+    {
+      "assignment_name": "Quiz 2 Review: Decision Trees and Ensembles",
+      "note_title": "Lecture 10 - Random Forests and Boosting",
+      "relevant": true,
+      "rationale": "Covers the bagging-variance and boosting-bias contrast the quiz asks for."
+    },
+    {
+      "assignment_name": "Quiz 2 Review: Decision Trees and Ensembles",
+      "note_title": "Section notes - Train/validation/test splits and baselines",
+      "relevant": false,
+      "rationale": "Methodology note, not on the quiz topic list."
+    },
+    {
+      "assignment_name": "Quiz 2 Review: Decision Trees and Ensembles",
+      "note_title": "Lecture 6 - Regularization: L1 vs L2",
+      "relevant": false,
+      "rationale": "Overfitting is discussed in both, but the quiz is about trees."
+    },
+    {
+      "assignment_name": "Essay 2: Causes of the First World War",
+      "note_title": "Lecture 3 - The alliance system before 1914",
+      "relevant": true,
+      "rationale": "The essay explicitly requires engaging with the alliance system."
+    },
+    {
+      "assignment_name": "Essay 2: Causes of the First World War",
+      "note_title": "Lecture 4 - The July Crisis, 1914",
+      "relevant": true,
+      "rationale": "The essay explicitly requires the July 1914 diplomatic crisis."
+    },
+    {
+      "assignment_name": "Essay 2: Causes of the First World War",
+      "note_title": "Reading notes - the Fischer thesis debate",
+      "relevant": true,
+      "rationale": "Supplies the historiographical position the essay demands."
+    },
+    {
+      "assignment_name": "Essay 2: Causes of the First World War",
+      "note_title": "Lecture 14 - Postwar reconstruction after 1945",
+      "relevant": false,
+      "rationale": "Wrong war, wrong decade."
+    },
+    {
+      "assignment_name": "Essay 2: Causes of the First World War",
+      "note_title": "Lecture 8 - Visual propaganda between the wars",
+      "relevant": false,
+      "rationale": "Same course and adjacent period, but no bearing on 1914 causation."
+    },
+    {
+      "assignment_name": "Primary Source Analysis: Interwar Propaganda",
+      "note_title": "Lecture 8 - Visual propaganda between the wars",
+      "relevant": true,
+      "rationale": "Gives the exact analytical framework the assignment asks for."
+    },
+    {
+      "assignment_name": "Primary Source Analysis: Interwar Propaganda",
+      "note_title": "Lecture 14 - Postwar reconstruction after 1945",
+      "relevant": false,
+      "rationale": "Post-1945, outside the 1919-1939 window."
+    },
+    {
+      "assignment_name": "Primary Source Analysis: Interwar Propaganda",
+      "note_title": "Lecture 4 - The July Crisis, 1914",
+      "relevant": false,
+      "rationale": "Pre-dates the interwar period the source must come from."
+    },
+    {
+      "assignment_name": "Primary Source Analysis: Interwar Propaganda",
+      "note_title": "Lecture 10 - Random Forests and Boosting",
+      "relevant": false,
+      "rationale": "Cross-course distractor."
+    }
+  ]
+}

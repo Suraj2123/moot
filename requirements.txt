@@ -1,0 +1,18 @@
+# Core -- everything the app needs to run end to end.
+numpy>=1.26
+requests>=2.31
+streamlit>=1.36
+fastapi>=0.110
+uvicorn>=0.29
+anthropic>=0.60
+python-dotenv>=1.0
+
+# Tests
+pytest>=8.0
+
+# Optional embedding provider. Local, free, no network at query time, but pulls
+# in torch (~2GB). Install only if you want to compare it against the hosted
+# provider in the eval:
+#   pip install sentence-transformers
+#
+# The `voyage` provider needs no extra package -- it is called over plain HTTP.

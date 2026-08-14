@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Local database -- rebuildable from Canvas or scripts/seed_demo.py.
+# data/eval/labels.json is NOT ignored: the label set is the slowest artefact
+# in the project to recreate and belongs in version control.
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
