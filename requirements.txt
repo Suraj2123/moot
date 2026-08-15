@@ -1,11 +1,19 @@
 # Core -- everything the app needs to run end to end.
 numpy>=1.26
 requests>=2.31
+sqlalchemy>=2.0
+alembic>=1.13
 streamlit>=1.36
 fastapi>=0.110
 uvicorn>=0.29
 anthropic>=0.60
 python-dotenv>=1.0
+
+# Postgres. Not needed for local SQLite development -- the app runs fully on
+# SQLite and the tests default to it. Install these to point DATABASE_URL at a
+# Postgres server and get the native pgvector column and index.
+psycopg2-binary>=2.9
+pgvector>=0.2.5
 
 # Tests
 pytest>=8.0

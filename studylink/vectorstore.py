@@ -19,6 +19,7 @@ import numpy as np
 from sqlalchemy import Connection, delete, func, select
 
 from .db import transaction
+from .pgvector_support import has_vector_column, to_vector_param
 from .schema import assignments, chunks, embeddings
 
 
@@ -71,6 +72,11 @@ class VectorStore:
             }
             for owner_id, vector in zip(owner_ids, vectors)
         ]
+        native = has_vector_column(self.conn)
+        if native:
+            for row, vector in zip(rows, vectors):
+                row["embedding"] = to_vector_param(vector)
+
         statement = _upsert(self.conn, embeddings)
         statement = statement.on_conflict_do_update(
             index_elements=[
@@ -78,7 +84,8 @@ class VectorStore:
                 embeddings.c.owner_id,
                 embeddings.c.model,
             ],
-            set_={"dim": statement.excluded.dim, "vector": statement.excluded.vector},
+            set_={"dim": statement.excluded.dim, "vector": statement.excluded.vector}
+            | ({"embedding": statement.excluded.embedding} if native else {}),
         )
         with transaction(self.conn):
             self.conn.execute(statement, rows)

@@ -144,6 +144,29 @@ embeddings = Table(
 Index("ix_embeddings_type_model", embeddings.c.owner_type, embeddings.c.model)
 
 
+def add_native_vector_column(dim: int) -> None:
+    """Attach the `embedding` column to the metadata so queries can name it.
+
+    Called at connect time when the dialect is Postgres. It is not in the Table
+    definition above because the dimension is not known until then -- it comes
+    from EMBEDDING_DIM, and pgvector needs a concrete number to build an index.
+
+    `metadata` is module-global, so a process that connects to Postgres and then
+    to SQLite carries this column into the SQLite DDL as well. That does not
+    happen in the app, which talks to one backend, but it does in a test run that
+    covers both. Hence the variant: on SQLite the column renders as a plain
+    nullable BLOB, which is inert and never read or written, instead of a
+    `VECTOR(256)` that SQLite's dynamic typing would accept as a real column type
+    and quietly let the tests pass on a schema no engine actually supports.
+    """
+    if "embedding" in embeddings.c:
+        return
+    from pgvector.sqlalchemy import Vector
+
+    native = Vector(dim).with_variant(LargeBinary, "sqlite")
+    embeddings.append_column(Column("embedding", native, nullable=True))
+
+
 eval_labels = Table(
     "eval_labels",
     metadata,

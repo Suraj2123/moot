@@ -107,5 +107,15 @@ def create_all(engine: Engine) -> None:
 
     Convenient for tests and first-run local setup. Anything with data in it
     should be migrated with Alembic instead, so schema changes are reviewable.
+
+    On Postgres this also installs pgvector and the native vector column, so a
+    create_all database and a migrated one have the same shape -- otherwise
+    tests would exercise a schema production never runs.
     """
     metadata.create_all(engine)
+
+    from .pgvector_support import ensure_vector_column
+
+    if engine.dialect.name == "postgresql":
+        with engine.connect() as conn:
+            ensure_vector_column(conn)
