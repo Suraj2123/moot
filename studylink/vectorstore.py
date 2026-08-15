@@ -29,6 +29,22 @@ def _from_blob(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
+# The embeddings table is keyed by (owner_type, owner_id) and carries no user
+# column of its own -- ownership lives on the row the vector describes. Every
+# read joins through this map, so there is no code path that can return a vector
+# without having proved who owns it.
+_OWNER_TABLES = {"chunk": "chunks", "assignment": "assignments"}
+
+
+def _owner_table(owner_type: str) -> str:
+    try:
+        return _OWNER_TABLES[owner_type]
+    except KeyError:
+        raise ValueError(
+            f"Unknown owner_type {owner_type!r}. Expected one of {sorted(_OWNER_TABLES)}."
+        ) from None
+
+
 class VectorStore:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -70,11 +86,20 @@ class VectorStore:
         with transaction(self.conn):
             self.conn.execute(sql, params)
 
-    def matrix(self, owner_type: str, model: str) -> tuple[list[int], np.ndarray]:
-        """Load every vector of a kind into memory as one (n, dim) matrix."""
+    def matrix(
+        self, owner_type: str, model: str, user_id: int
+    ) -> tuple[list[int], np.ndarray]:
+        """Load one user's vectors of a kind into memory as an (n, dim) matrix."""
+        table = _owner_table(owner_type)
         rows = self.conn.execute(
-            "SELECT owner_id, vector FROM embeddings WHERE owner_type = ? AND model = ? ORDER BY owner_id",
-            (owner_type, model),
+            f"""
+            SELECT e.owner_id, e.vector
+            FROM embeddings e
+            JOIN {table} o ON o.id = e.owner_id
+            WHERE e.owner_type = ? AND e.model = ? AND o.user_id = ?
+            ORDER BY e.owner_id
+            """,
+            (owner_type, model, user_id),
         ).fetchall()
         if not rows:
             return [], np.zeros((0, 0), dtype=np.float32)
@@ -82,10 +107,18 @@ class VectorStore:
         matrix = np.vstack([_from_blob(r["vector"]) for r in rows])
         return ids, matrix
 
-    def get(self, owner_type: str, owner_id: int, model: str) -> np.ndarray | None:
+    def get(
+        self, owner_type: str, owner_id: int, model: str, user_id: int
+    ) -> np.ndarray | None:
+        table = _owner_table(owner_type)
         row = self.conn.execute(
-            "SELECT vector FROM embeddings WHERE owner_type = ? AND owner_id = ? AND model = ?",
-            (owner_type, int(owner_id), model),
+            f"""
+            SELECT e.vector
+            FROM embeddings e
+            JOIN {table} o ON o.id = e.owner_id
+            WHERE e.owner_type = ? AND e.owner_id = ? AND e.model = ? AND o.user_id = ?
+            """,
+            (owner_type, int(owner_id), model, user_id),
         ).fetchone()
         return _from_blob(row["vector"]) if row else None
 
@@ -94,11 +127,15 @@ class VectorStore:
         query: np.ndarray,
         owner_type: str,
         model: str,
+        user_id: int,
         top_k: int = 10,
         exclude_ids: Iterable[int] = (),
     ) -> list[tuple[int, float]]:
-        """Exact cosine search. Vectors are stored L2-normalised, so this is a dot product."""
-        ids, matrix = self.matrix(owner_type, model)
+        """Exact cosine search over one user's vectors.
+
+        Vectors are stored L2-normalised, so this is a dot product.
+        """
+        ids, matrix = self.matrix(owner_type, model, user_id)
         if not ids:
             return []
         if matrix.shape[1] != query.shape[0]:
@@ -121,9 +158,15 @@ class VectorStore:
                 break
         return results
 
-    def count(self, owner_type: str, model: str) -> int:
+    def count(self, owner_type: str, model: str, user_id: int) -> int:
+        table = _owner_table(owner_type)
         row = self.conn.execute(
-            "SELECT COUNT(*) AS n FROM embeddings WHERE owner_type = ? AND model = ?",
-            (owner_type, model),
+            f"""
+            SELECT COUNT(*) AS n
+            FROM embeddings e
+            JOIN {table} o ON o.id = e.owner_id
+            WHERE e.owner_type = ? AND e.model = ? AND o.user_id = ?
+            """,
+            (owner_type, model, user_id),
         ).fetchone()
         return int(row["n"])

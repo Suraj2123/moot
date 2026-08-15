@@ -95,28 +95,36 @@ def test_confidence_is_bounded_and_monotonic():
 
 def test_vector_store_roundtrip_and_dimension_guard(conn):
     provider = build_provider("hash", "hash-64")
+    user_id = store.get_or_create_default_user(conn)
+    note_id = store.create_note(conn, "n", "body", user_id=user_id)
+    chunk_ids = store.replace_chunks(conn, note_id, ["alpha beta", "gamma delta"], 60, 10)
+
     vectors = VectorStore(conn)
     matrix = provider.embed(["alpha beta", "gamma delta"])
-    vectors.upsert_many("chunk", [1, 2], matrix, provider.name)
+    vectors.upsert_many("chunk", chunk_ids, matrix, provider.name)
 
-    ids, loaded = vectors.matrix("chunk", provider.name)
-    assert ids == [1, 2]
+    ids, loaded = vectors.matrix("chunk", provider.name, user_id)
+    assert ids == chunk_ids
     assert loaded.shape == (2, 64)
     assert np.allclose(loaded, matrix)
 
-    hits = vectors.search(matrix[0], "chunk", provider.name, top_k=2)
-    assert hits[0][0] == 1
+    hits = vectors.search(matrix[0], "chunk", provider.name, user_id, top_k=2)
+    assert hits[0][0] == chunk_ids[0]
     assert hits[0][1] > hits[1][1]
 
 
 def test_vector_store_rejects_dimension_mismatch(conn):
     small = build_provider("hash", "hash-64")
+    user_id = store.get_or_create_default_user(conn)
+    note_id = store.create_note(conn, "n", "body", user_id=user_id)
+    chunk_ids = store.replace_chunks(conn, note_id, ["alpha"], 60, 10)
+
     vectors = VectorStore(conn)
-    vectors.upsert_many("chunk", [1], small.embed(["alpha"]), small.name)
+    vectors.upsert_many("chunk", chunk_ids, small.embed(["alpha"]), small.name)
 
     big = build_provider("hash", "hash-256")
     try:
-        vectors.search(big.embed(["alpha"])[0], "chunk", small.name, top_k=1)
+        vectors.search(big.embed(["alpha"])[0], "chunk", small.name, user_id, top_k=1)
     except ValueError as exc:
         assert "Dimension mismatch" in str(exc)
     else:  # pragma: no cover

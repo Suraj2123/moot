@@ -117,7 +117,7 @@ class Retriever:
     ) -> list[tuple[int, int, float]]:
         """Return (note_id, chunk_id, score), best chunk first, one row per note."""
         hits = self.vectors.search(
-            query_vector, "chunk", self.provider.name, top_k=candidate_pool
+            query_vector, "chunk", self.provider.name, self.user_id, top_k=candidate_pool
         )
         if not hits:
             return []
@@ -181,7 +181,9 @@ class Retriever:
     ) -> list[NoteMatch]:
         """Top-N notes relevant to an assignment. The core of the app."""
         top_k = top_k or self.config.top_k
-        query_vector = self.vectors.get("assignment", assignment.id, self.provider.name)
+        query_vector = self.vectors.get(
+            "assignment", assignment.id, self.provider.name, self.user_id
+        )
         if query_vector is None:
             # Assignment was added since the last reindex -- embed it on the fly
             # so the UI never shows an empty result for a stale index.
@@ -215,14 +217,16 @@ class Retriever:
         chunk_vectors = []
         kept_chunks = []
         for chunk in chunks:
-            vector = self.vectors.get("chunk", chunk.id, self.provider.name)
+            vector = self.vectors.get("chunk", chunk.id, self.provider.name, self.user_id)
             if vector is not None:
                 chunk_vectors.append(vector)
                 kept_chunks.append(chunk)
         if not chunk_vectors:
             return []
 
-        assignment_ids, matrix = self.vectors.matrix("assignment", self.provider.name)
+        assignment_ids, matrix = self.vectors.matrix(
+            "assignment", self.provider.name, self.user_id
+        )
         if not assignment_ids:
             return []
 

@@ -182,8 +182,10 @@ class StudyLink:
             table: int(self.conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"])
             for table in ("courses", "assignments", "notes", "chunks")
         }
-        chunk_vectors = self.indexer.vectors.count("chunk", self.provider.name)
-        assignment_vectors = self.indexer.vectors.count("assignment", self.provider.name)
+        chunk_vectors = self.indexer.vectors.count("chunk", self.provider.name, self.user_id)
+        assignment_vectors = self.indexer.vectors.count(
+            "assignment", self.provider.name, self.user_id
+        )
 
         params = store.chunking_params_in_use(self.conn, self.user_id)
         index_stale = (
