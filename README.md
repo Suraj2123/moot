@@ -132,7 +132,21 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-44 tests, no network, no API keys.
+66 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
+paths and skip unless you point them at a server:
+
+```bash
+STUDYLINK_TEST_POSTGRES_URL=postgresql+psycopg2://... python -m pytest tests -q
+```
+
+CI runs both, and diffs the retrieval metrics between the two backends.
+
+## Design notes
+
+- `docs/STORAGE.md` -- how vectors are stored and searched on each backend, why
+  there is no approximate index, and the measurements that would change that.
+- `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
+  decisions behind it.
 
 ## Learning path
 
