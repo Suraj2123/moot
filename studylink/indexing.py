@@ -15,7 +15,8 @@ re-ingesting notes.
 
 from __future__ import annotations
 
-import sqlite3
+from sqlalchemy import Connection, func, select
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,6 +25,7 @@ from . import store
 from .chunking import chunk_text
 from .config import RetrievalConfig
 from .embeddings import EmbeddingProvider
+from .schema import chunks, embeddings
 from .vectorstore import VectorStore
 
 
@@ -45,7 +47,7 @@ class IndexStats:
 class Indexer:
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: Connection,
         provider: EmbeddingProvider,
         config: RetrievalConfig,
         user_id: int,
@@ -60,15 +62,15 @@ class Indexer:
 
     def _needs_rechunk(self, note_id: int) -> bool:
         rows = self.conn.execute(
-            "SELECT chunk_size, chunk_overlap, COUNT(*) AS n FROM chunks WHERE note_id = ? "
-            "GROUP BY chunk_size, chunk_overlap",
-            (note_id,),
-        ).fetchall()
+            select(chunks.c.chunk_size, chunks.c.chunk_overlap, func.count())
+            .where(chunks.c.note_id == note_id)
+            .group_by(chunks.c.chunk_size, chunks.c.chunk_overlap)
+        ).all()
         if len(rows) != 1:
             return True  # no chunks at all, or a mix of parameter sets
         return (
-            int(rows[0]["chunk_size"]) != self.config.chunk_size
-            or int(rows[0]["chunk_overlap"]) != self.config.chunk_overlap
+            int(rows[0][0]) != self.config.chunk_size
+            or int(rows[0][1]) != self.config.chunk_overlap
         )
 
     def chunk_notes(self, force: bool = False) -> tuple[int, int]:
@@ -95,10 +97,12 @@ class Indexer:
         if not items:
             return 0
         existing = {
-            int(r["owner_id"])
-            for r in self.conn.execute(
-                "SELECT owner_id FROM embeddings WHERE owner_type = ? AND model = ?",
-                (owner_type, self.provider.name),
+            int(row[0])
+            for row in self.conn.execute(
+                select(embeddings.c.owner_id).where(
+                    embeddings.c.owner_type == owner_type,
+                    embeddings.c.model == self.provider.name,
+                )
             )
         }
         pending = [(owner_id, text) for owner_id, text in items if owner_id not in existing]

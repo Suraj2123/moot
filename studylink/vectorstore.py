@@ -13,12 +13,13 @@ so swapping in an ANN index later is a change to this file only.
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Iterable, Sequence
 
 import numpy as np
+from sqlalchemy import Connection, delete, func, select
 
 from .db import transaction
+from .schema import assignments, chunks, embeddings
 
 
 def _to_blob(vector: np.ndarray) -> bytes:
@@ -33,10 +34,10 @@ def _from_blob(blob: bytes) -> np.ndarray:
 # column of its own -- ownership lives on the row the vector describes. Every
 # read joins through this map, so there is no code path that can return a vector
 # without having proved who owns it.
-_OWNER_TABLES = {"chunk": "chunks", "assignment": "assignments"}
+_OWNER_TABLES = {"chunk": chunks, "assignment": assignments}
 
 
-def _owner_table(owner_type: str) -> str:
+def _owner_table(owner_type: str):
     try:
         return _OWNER_TABLES[owner_type]
     except KeyError:
@@ -46,7 +47,7 @@ def _owner_table(owner_type: str) -> str:
 
 
 class VectorStore:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Connection) -> None:
         self.conn = conn
 
     def upsert_many(
@@ -58,69 +59,78 @@ class VectorStore:
     ) -> None:
         if len(owner_ids) != len(vectors):
             raise ValueError("owner_ids and vectors must be the same length")
+        from .store import _upsert  # local import: avoids a circular module cycle
+
         rows = [
-            (owner_type, int(owner_id), model, int(vector.shape[0]), _to_blob(vector))
+            {
+                "owner_type": owner_type,
+                "owner_id": int(owner_id),
+                "model": model,
+                "dim": int(vector.shape[0]),
+                "vector": _to_blob(vector),
+            }
             for owner_id, vector in zip(owner_ids, vectors)
         ]
+        statement = _upsert(self.conn, embeddings)
+        statement = statement.on_conflict_do_update(
+            index_elements=[
+                embeddings.c.owner_type,
+                embeddings.c.owner_id,
+                embeddings.c.model,
+            ],
+            set_={"dim": statement.excluded.dim, "vector": statement.excluded.vector},
+        )
         with transaction(self.conn):
-            self.conn.executemany(
-                """
-                INSERT INTO embeddings (owner_type, owner_id, model, dim, vector)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(owner_type, owner_id, model)
-                DO UPDATE SET dim = excluded.dim, vector = excluded.vector
-                """,
-                rows,
-            )
+            self.conn.execute(statement, rows)
 
     def delete(self, owner_type: str, owner_ids: Iterable[int], model: str | None = None) -> None:
         ids = [int(i) for i in owner_ids]
         if not ids:
             return
-        placeholders = ",".join("?" for _ in ids)
-        params: list = [owner_type, *ids]
-        sql = f"DELETE FROM embeddings WHERE owner_type = ? AND owner_id IN ({placeholders})"
+        statement = delete(embeddings).where(
+            embeddings.c.owner_type == owner_type, embeddings.c.owner_id.in_(ids)
+        )
         if model:
-            sql += " AND model = ?"
-            params.append(model)
+            statement = statement.where(embeddings.c.model == model)
         with transaction(self.conn):
-            self.conn.execute(sql, params)
+            self.conn.execute(statement)
 
     def matrix(
         self, owner_type: str, model: str, user_id: int
     ) -> tuple[list[int], np.ndarray]:
         """Load one user's vectors of a kind into memory as an (n, dim) matrix."""
-        table = _owner_table(owner_type)
+        owner = _owner_table(owner_type)
         rows = self.conn.execute(
-            f"""
-            SELECT e.owner_id, e.vector
-            FROM embeddings e
-            JOIN {table} o ON o.id = e.owner_id
-            WHERE e.owner_type = ? AND e.model = ? AND o.user_id = ?
-            ORDER BY e.owner_id
-            """,
-            (owner_type, model, user_id),
-        ).fetchall()
+            select(embeddings.c.owner_id, embeddings.c.vector)
+            .join(owner, owner.c.id == embeddings.c.owner_id)
+            .where(
+                embeddings.c.owner_type == owner_type,
+                embeddings.c.model == model,
+                owner.c.user_id == user_id,
+            )
+            .order_by(embeddings.c.owner_id)
+        ).all()
         if not rows:
             return [], np.zeros((0, 0), dtype=np.float32)
-        ids = [int(r["owner_id"]) for r in rows]
-        matrix = np.vstack([_from_blob(r["vector"]) for r in rows])
+        ids = [int(row[0]) for row in rows]
+        matrix = np.vstack([_from_blob(row[1]) for row in rows])
         return ids, matrix
 
     def get(
         self, owner_type: str, owner_id: int, model: str, user_id: int
     ) -> np.ndarray | None:
-        table = _owner_table(owner_type)
+        owner = _owner_table(owner_type)
         row = self.conn.execute(
-            f"""
-            SELECT e.vector
-            FROM embeddings e
-            JOIN {table} o ON o.id = e.owner_id
-            WHERE e.owner_type = ? AND e.owner_id = ? AND e.model = ? AND o.user_id = ?
-            """,
-            (owner_type, int(owner_id), model, user_id),
-        ).fetchone()
-        return _from_blob(row["vector"]) if row else None
+            select(embeddings.c.vector)
+            .join(owner, owner.c.id == embeddings.c.owner_id)
+            .where(
+                embeddings.c.owner_type == owner_type,
+                embeddings.c.owner_id == int(owner_id),
+                embeddings.c.model == model,
+                owner.c.user_id == user_id,
+            )
+        ).first()
+        return _from_blob(row[0]) if row else None
 
     def search(
         self,
@@ -159,14 +169,15 @@ class VectorStore:
         return results
 
     def count(self, owner_type: str, model: str, user_id: int) -> int:
-        table = _owner_table(owner_type)
+        owner = _owner_table(owner_type)
         row = self.conn.execute(
-            f"""
-            SELECT COUNT(*) AS n
-            FROM embeddings e
-            JOIN {table} o ON o.id = e.owner_id
-            WHERE e.owner_type = ? AND e.model = ? AND o.user_id = ?
-            """,
-            (owner_type, model, user_id),
-        ).fetchone()
-        return int(row["n"])
+            select(func.count())
+            .select_from(embeddings)
+            .join(owner, owner.c.id == embeddings.c.owner_id)
+            .where(
+                embeddings.c.owner_type == owner_type,
+                embeddings.c.model == model,
+                owner.c.user_id == user_id,
+            )
+        ).first()
+        return int(row[0])

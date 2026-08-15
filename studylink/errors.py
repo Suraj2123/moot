@@ -14,8 +14,11 @@ confirms the row exists and that is exactly the fact we are protecting.
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Optional
+
+from sqlalchemy import Connection, select
+
+from .schema import USER_OWNED_TABLES
 
 
 class StudyLinkError(RuntimeError):
@@ -48,25 +51,24 @@ class CrossUserAccessError(StudyLinkError):
         self.actor_id = actor_id
 
 
-_OWNED_TABLES = {"courses", "assignments", "notes", "chunks"}
-
-
-def assert_owned(
-    conn: sqlite3.Connection, table: str, row_id: int, user_id: int
-) -> None:
+def assert_owned(conn: Connection, table: str, row_id: int, user_id: int) -> None:
     """Raise unless `row_id` in `table` belongs to `user_id`.
 
     Call this at the point a caller-supplied id first enters the system. Once a
     row has been checked, the scoped queries below it cannot widen the scope
     again, so one check at the boundary is enough.
     """
-    if table not in _OWNED_TABLES:
-        raise ValueError(f"{table!r} is not a user-owned table")
+    try:
+        target = USER_OWNED_TABLES[table]
+    except KeyError:
+        raise ValueError(f"{table!r} is not a user-owned table") from None
 
-    row = conn.execute(f"SELECT user_id FROM {table} WHERE id = ?", (int(row_id),)).fetchone()
+    row = conn.execute(
+        select(target.c.user_id).where(target.c.id == int(row_id))
+    ).first()
     if row is None:
         raise NotFoundError(table, int(row_id))
 
-    owner_id = row["user_id"]
+    owner_id = row[0]
     if owner_id != user_id:
         raise CrossUserAccessError(table, int(row_id), owner_id, user_id)

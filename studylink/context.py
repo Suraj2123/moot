@@ -12,7 +12,8 @@ for `UserContext` finds every ownership-sensitive entry point in one search.
 
 from __future__ import annotations
 
-import sqlite3
+from sqlalchemy import Connection
+
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -34,7 +35,7 @@ class UserContext:
             raise ValueError(f"UserContext needs a real user id, got {self.user_id!r}")
 
     @classmethod
-    def local(cls, conn: sqlite3.Connection) -> "UserContext":
+    def local(cls, conn: Connection) -> "UserContext":
         """The single-user context used by the CLI, the seeder, and local dev.
 
         Day 3 adds `from_apple_token`; until then this is the only constructor

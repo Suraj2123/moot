@@ -11,8 +11,9 @@ the database is rebuilt from scratch and every id changes.
 
 from __future__ import annotations
 
+from sqlalchemy import Connection
+
 import json
-import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def load_labels(path: Path) -> list[LabeledPair]:
 
 
 def resolve_labels(
-    conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int
+    conn: Connection, pairs: list[LabeledPair], user_id: int
 ) -> tuple[dict[int, set[int]], dict[int, set[int]], list[str]]:
     """Map title-keyed labels onto database ids.
 
@@ -88,7 +89,7 @@ def resolve_labels(
     return positives, negatives, unresolved
 
 
-def sync_to_db(conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int) -> int:
+def sync_to_db(conn: Connection, pairs: list[LabeledPair], user_id: int) -> int:
     """Mirror file labels into SQLite so the UI can show and edit them."""
     positives, negatives, _ = resolve_labels(conn, pairs, user_id)
     written = 0
@@ -103,7 +104,7 @@ def sync_to_db(conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int)
     return written
 
 
-def export_from_db(conn: sqlite3.Connection, user_id: int) -> list[LabeledPair]:
+def export_from_db(conn: Connection, user_id: int) -> list[LabeledPair]:
     """Pull interactively-created labels back out into file form."""
     return [
         LabeledPair(

@@ -20,12 +20,14 @@ would be worse than owning eleven lines of loop.
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from sqlalchemy import Connection, insert, select
+
 from . import store
+from .schema import work_messages, work_sessions
 from .config import AGENT_MODEL
 from .models import Assignment, NoteMatch, WorkSessionOutput
 from .retrieval import Retriever
@@ -162,7 +164,7 @@ def format_assignment_context(assignment: Assignment) -> str:
 class WorkSessionAgent:
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: Connection,
         retriever: Retriever,
         client=None,
         model: str = AGENT_MODEL,
@@ -352,42 +354,47 @@ class WorkSessionAgent:
 
 
 def save_session(
-    conn: sqlite3.Connection, assignment_id: int, mode: str, user_id: int
+    conn: Connection, assignment_id: int, mode: str, user_id: int
 ) -> int:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    cursor = conn.execute(
-        "INSERT INTO work_sessions (user_id, assignment_id, mode, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, assignment_id, mode, now),
+    result = conn.execute(
+        insert(work_sessions).values(
+            user_id=user_id,
+            assignment_id=assignment_id,
+            mode=mode,
+            created_at=datetime.now(timezone.utc),
+        )
     )
     conn.commit()
-    return int(cursor.lastrowid)
+    return int(result.inserted_primary_key[0])
 
 
-def save_message(conn: sqlite3.Connection, session_id: int, role: str, content: str) -> None:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+def save_message(conn: Connection, session_id: int, role: str, content: str) -> None:
     conn.execute(
-        "INSERT INTO work_messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-        (session_id, role, content, now),
+        insert(work_messages).values(
+            session_id=session_id,
+            role=role,
+            content=content,
+            created_at=datetime.now(timezone.utc),
+        )
     )
     conn.commit()
 
 
-def load_messages(conn: sqlite3.Connection, session_id: int, user_id: int) -> list[dict]:
+def load_messages(conn: Connection, session_id: int, user_id: int) -> list[dict]:
     rows = conn.execute(
-        """
-        SELECT m.role, m.content
-        FROM work_messages m
-        JOIN work_sessions s ON s.id = m.session_id
-        WHERE m.session_id = ? AND s.user_id = ?
-        ORDER BY m.id
-        """,
-        (session_id, user_id),
-    ).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in rows]
+        select(work_messages.c.role, work_messages.c.content)
+        .join(work_sessions, work_sessions.c.id == work_messages.c.session_id)
+        .where(
+            work_messages.c.session_id == session_id,
+            work_sessions.c.user_id == user_id,
+        )
+        .order_by(work_messages.c.id)
+    ).all()
+    return [{"role": row[0], "content": row[1]} for row in rows]
 
 
 def resolve_citations(
-    conn: sqlite3.Connection, note_ids: list[int], user_id: int
+    conn: Connection, note_ids: list[int], user_id: int
 ) -> list[dict]:
     """Turn cited ids into displayable references, flagging any that do not exist."""
     notes = store.get_notes(conn, note_ids, user_id)

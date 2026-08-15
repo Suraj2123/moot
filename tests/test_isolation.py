@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import pytest
 
+from sqlalchemy import delete, func, select
+
 from studylink import store
 from studylink.config import RetrievalConfig
 from studylink.errors import CrossUserAccessError, NotFoundError, assert_owned
 from studylink.indexing import Indexer
 from studylink.retrieval import Retriever
+from studylink.schema import embeddings, users
 
 
 # ------------------------------------------------------------------ store layer
@@ -128,8 +131,10 @@ def test_vector_count_is_per_user(conn, provider, config, two_users):
     alice_n = retriever.vectors.count("chunk", provider.name, two_users["alice"])
     bob_n = retriever.vectors.count("chunk", provider.name, two_users["bob"])
     total = conn.execute(
-        "SELECT COUNT(*) AS n FROM embeddings WHERE owner_type = 'chunk'"
-    ).fetchone()["n"]
+        select(func.count())
+        .select_from(embeddings)
+        .where(embeddings.c.owner_type == "chunk")
+    ).scalar_one()
 
     assert alice_n > 0 and bob_n > 0
     assert alice_n + bob_n == total
@@ -158,7 +163,7 @@ def test_assert_owned_rejects_unknown_tables(conn, two_users):
 
 
 def test_deleting_a_user_takes_their_data_with_them(conn, two_users):
-    conn.execute("DELETE FROM users WHERE id = ?", (two_users["alice"],))
+    conn.execute(delete(users).where(users.c.id == two_users["alice"]))
     conn.commit()
 
     assert store.list_notes(conn, two_users["alice"]) == []

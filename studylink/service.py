@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from . import store
+from sqlalchemy import func, select
+
+from . import schema, store
 from .agent import WorkSessionAgent
 from .canvas import CanvasClient, SyncResult, sync_all
 from .config import RetrievalConfig, Settings, load_settings
@@ -50,7 +52,8 @@ class StudyLink:
         user: Optional[UserContext] = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.conn = connect(self.settings.db_path)
+        # sqlalchemy_url honours DATABASE_URL and falls back to SQLite at db_path.
+        self.conn = connect(self.settings.sqlalchemy_url)
         self.provider = build_provider(
             self.settings.embedding_provider,
             self.settings.embedding_model,
@@ -60,7 +63,22 @@ class StudyLink:
         # Callers that already know who they are pass a context; the CLI, the
         # seeder, and local dev fall back to the single local user.
         self.user = user or UserContext.local(self.conn)
-        self.indexer = Indexer(self.conn, self.provider, self.config, self.user_id)
+
+    @property
+    def user(self) -> UserContext:
+        return self._user
+
+    @user.setter
+    def user(self, context: UserContext) -> None:
+        """Rebuild the index and retriever whenever the acting user changes.
+
+        These hold a user id captured at construction. Leaving them stale after
+        a user switch is the kind of bug that hides on SQLite -- where a reset
+        database reuses rowid 1, so the stale id happens to still match -- and
+        only surfaces on Postgres, whose sequences keep counting.
+        """
+        self._user = context
+        self.indexer = Indexer(self.conn, self.provider, self.config, context.user_id)
         self.retriever = self.indexer_retriever()
 
     @property
@@ -195,8 +213,17 @@ class StudyLink:
 
     def status(self) -> Status:
         counts = {
-            table: int(self.conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"])
-            for table in ("courses", "assignments", "notes", "chunks")
+            name: int(
+                self.conn.execute(
+                    select(func.count()).select_from(table).where(table.c.user_id == self.user_id)
+                ).scalar_one()
+            )
+            for name, table in (
+                ("courses", schema.courses),
+                ("assignments", schema.assignments),
+                ("notes", schema.notes),
+                ("chunks", schema.chunks),
+            )
         }
         chunk_vectors = self.indexer.vectors.count("chunk", self.provider.name, self.user_id)
         assignment_vectors = self.indexer.vectors.count(
@@ -218,6 +245,6 @@ class StudyLink:
             chunk_vectors=chunk_vectors,
             assignment_vectors=assignment_vectors,
             provider=self.provider.name,
-            last_sync=store.last_sync(self.conn),
+            last_sync=store.last_sync(self.conn, self.user_id),
             index_stale=index_stale,
         )

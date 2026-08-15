@@ -7,7 +7,8 @@ pairs", which is a claim you can act on and defend.
 
 from __future__ import annotations
 
-import sqlite3
+from sqlalchemy import Connection
+
 from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
@@ -76,7 +77,7 @@ class EvalReport:
 
 
 def evaluate_config(
-    conn: sqlite3.Connection,
+    conn: Connection,
     provider: EmbeddingProvider,
     config: RetrievalConfig,
     labels_path: Path,
@@ -146,7 +147,7 @@ def evaluate_config(
 
 
 def sweep(
-    conn: sqlite3.Connection,
+    conn: Connection,
     provider: EmbeddingProvider,
     labels_path: Path,
     user_id: int,

@@ -10,9 +10,10 @@ re-running it updates rows in place rather than duplicating them.
 
 from __future__ import annotations
 
+from sqlalchemy import Connection
+
 import html
 import re
-import sqlite3
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
@@ -121,7 +122,7 @@ class CanvasClient:
         return response.json()
 
 
-def sync_all(conn: sqlite3.Connection, client: CanvasClient, user_id: int) -> SyncResult:
+def sync_all(conn: Connection, client: CanvasClient, user_id: int) -> SyncResult:
     """Pull every active course and its assignments into the local database."""
     errors: list[str] = []
     course_count = 0
@@ -166,5 +167,7 @@ def sync_all(conn: sqlite3.Connection, client: CanvasClient, user_id: int) -> Sy
             except Exception as exc:
                 errors.append(f"assignment {assignment.get('id')}: {exc}")
 
-    store.record_sync(conn, course_count, assignment_count, "; ".join(errors[:5]))
+    store.record_sync(
+        conn, course_count, assignment_count, "; ".join(errors[:5]), user_id=user_id
+    )
     return SyncResult(courses=course_count, assignments=assignment_count, errors=errors)

@@ -12,8 +12,9 @@ notes, trust us" and a result a student can sanity-check in two seconds.
 
 from __future__ import annotations
 
+from sqlalchemy import Connection
+
 import re
-import sqlite3
 from typing import Optional
 
 import numpy as np
@@ -99,7 +100,7 @@ def calibrate_confidence(
 class Retriever:
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: Connection,
         provider: EmbeddingProvider,
         config: RetrievalConfig,
         user_id: int,
