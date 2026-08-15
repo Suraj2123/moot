@@ -16,6 +16,7 @@ from . import store
 from .agent import WorkSessionAgent
 from .canvas import CanvasClient, SyncResult, sync_all
 from .config import RetrievalConfig, Settings, load_settings
+from .context import UserContext
 from .db import connect
 from .embeddings import build_provider
 from .evaluation.dataset import load_labels, sync_to_db
@@ -42,7 +43,11 @@ class Status:
 
 
 class StudyLink:
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        user: Optional[UserContext] = None,
+    ) -> None:
         self.settings = settings or load_settings()
         self.conn = connect(self.settings.db_path)
         self.provider = build_provider(
@@ -51,11 +56,16 @@ class StudyLink:
             self.settings.voyage_api_key,
         )
         self.config = self.settings.retrieval
-        # Resolved here for now; commit 4 replaces this with an explicit
-        # UserContext supplied by the caller.
-        self.user_id = store.get_or_create_default_user(self.conn)
+        # Callers that already know who they are pass a context; the CLI, the
+        # seeder, and local dev fall back to the single local user.
+        self.user = user or UserContext.local(self.conn)
         self.indexer = Indexer(self.conn, self.provider, self.config, self.user_id)
         self.retriever = self.indexer_retriever()
+
+    @property
+    def user_id(self) -> int:
+        """Shorthand for the owning user's id, read-only by design."""
+        return self.user.user_id
 
     def indexer_retriever(self):
         from .retrieval import Retriever

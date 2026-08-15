@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from .agent import AgentUnavailable, citation_coverage
 from .canvas import CanvasError
+from .context import UserContext
 from .service import StudyLink
 
 api = FastAPI(title="StudyLink", version="0.1.0")
@@ -24,9 +25,17 @@ _app: Optional[StudyLink] = None
 
 
 def get_app() -> StudyLink:
+    """The service for the current caller.
+
+    Day 3 replaces this with a FastAPI dependency that builds a UserContext from
+    the request's bearer token. Until then every request is the local user, and
+    that assumption lives in exactly one place.
+    """
     global _app
     if _app is None:
-        _app = StudyLink()
+        app = StudyLink()
+        app.user = UserContext.local(app.conn)
+        _app = app
     return _app
 
 
