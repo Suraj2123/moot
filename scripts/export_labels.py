@@ -28,7 +28,7 @@ def main() -> int:
 
     settings = load_settings()
     app = StudyLink(settings)
-    pairs = export_from_db(app.conn)
+    pairs = export_from_db(app.conn, app.user_id)
     if not pairs:
         print("No labels in the database.")
         return 1

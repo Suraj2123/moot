@@ -94,16 +94,16 @@ def sync_to_db(conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int)
     written = 0
     for assignment_id, note_ids in positives.items():
         for note_id in note_ids:
-            store.set_label(conn, assignment_id, note_id, True)
+            store.set_label(conn, assignment_id, note_id, True, user_id=user_id)
             written += 1
     for assignment_id, note_ids in negatives.items():
         for note_id in note_ids:
-            store.set_label(conn, assignment_id, note_id, False)
+            store.set_label(conn, assignment_id, note_id, False, user_id=user_id)
             written += 1
     return written
 
 
-def export_from_db(conn: sqlite3.Connection) -> list[LabeledPair]:
+def export_from_db(conn: sqlite3.Connection, user_id: int) -> list[LabeledPair]:
     """Pull interactively-created labels back out into file form."""
     return [
         LabeledPair(
@@ -112,5 +112,5 @@ def export_from_db(conn: sqlite3.Connection) -> list[LabeledPair]:
             relevant=bool(row["relevant"]),
             rationale=row.get("rationale", "") or "",
         )
-        for row in store.list_labels(conn)
+        for row in store.list_labels(conn, user_id)
     ]

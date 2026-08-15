@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 CREATE TABLE IF NOT EXISTS eval_labels (
     id            INTEGER PRIMARY KEY,
+    user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
     assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
     note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     relevant      INTEGER NOT NULL,    -- 1 = should match, 0 = should not
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS eval_labels (
 
 CREATE TABLE IF NOT EXISTS work_sessions (
     id            INTEGER PRIMARY KEY,
+    user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
     assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
     mode          TEXT NOT NULL,
     created_at    TEXT NOT NULL

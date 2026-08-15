@@ -19,7 +19,7 @@ from .config import RetrievalConfig, Settings, load_settings
 from .context import UserContext
 from .db import connect
 from .embeddings import build_provider
-from .errors import CrossUserAccessError, NotFoundError, assert_owned
+from .errors import NotFoundError, assert_owned
 from .evaluation.dataset import load_labels, sync_to_db
 from .evaluation.runner import EvalReport, evaluate_config, sweep
 from .indexing import Indexer, IndexStats
@@ -155,6 +155,18 @@ class StudyLink:
         return WorkSessionAgent(self.conn, self.retriever)
 
     # ---------------------------------------------------------------- evaluation
+
+    def list_labels(self) -> list[dict]:
+        return store.list_labels(self.conn, self.user_id)
+
+    def set_label(
+        self, assignment_id: int, note_id: int, relevant: bool, rationale: str = ""
+    ) -> None:
+        assert_owned(self.conn, "assignments", assignment_id, self.user_id)
+        assert_owned(self.conn, "notes", note_id, self.user_id)
+        store.set_label(
+            self.conn, assignment_id, note_id, relevant, rationale, user_id=self.user_id
+        )
 
     def load_eval_labels(self, path: Optional[Path] = None) -> int:
         pairs = load_labels(path or self.settings.labels_path)

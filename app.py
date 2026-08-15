@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from studylink import store
 from studylink.agent import AgentUnavailable, citation_coverage, resolve_citations
 from studylink.canvas import CanvasError
 from studylink.config import load_settings
@@ -386,7 +385,7 @@ def view_quality() -> None:
         "Numbers here are how you know the matching works, rather than assuming it."
     )
 
-    labels = store.list_labels(app.conn)
+    labels = app.list_labels()
     if not labels:
         st.info(
             "No labels loaded. Run `python scripts/seed_demo.py`, or label pairs below."
@@ -458,7 +457,7 @@ def view_quality() -> None:
         relevant = col3.radio("Should match?", ["yes", "no"], horizontal=True)
         rationale = st.text_input("Rationale (one line -- future you will thank present you)")
         if st.button("Save label"):
-            store.set_label(app.conn, assignment.id, note.id, relevant == "yes", rationale)
+            app.set_label(assignment.id, note.id, relevant == "yes", rationale)
             st.success("Saved. Export to JSON with `python scripts/export_labels.py`.")
             st.rerun()
 

@@ -351,11 +351,13 @@ class WorkSessionAgent:
 # ------------------------------------------------------------------- persistence
 
 
-def save_session(conn: sqlite3.Connection, assignment_id: int, mode: str) -> int:
+def save_session(
+    conn: sqlite3.Connection, assignment_id: int, mode: str, user_id: int
+) -> int:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cursor = conn.execute(
-        "INSERT INTO work_sessions (assignment_id, mode, created_at) VALUES (?, ?, ?)",
-        (assignment_id, mode, now),
+        "INSERT INTO work_sessions (user_id, assignment_id, mode, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, assignment_id, mode, now),
     )
     conn.commit()
     return int(cursor.lastrowid)
@@ -370,10 +372,16 @@ def save_message(conn: sqlite3.Connection, session_id: int, role: str, content: 
     conn.commit()
 
 
-def load_messages(conn: sqlite3.Connection, session_id: int) -> list[dict]:
+def load_messages(conn: sqlite3.Connection, session_id: int, user_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT role, content FROM work_messages WHERE session_id = ? ORDER BY id",
-        (session_id,),
+        """
+        SELECT m.role, m.content
+        FROM work_messages m
+        JOIN work_sessions s ON s.id = m.session_id
+        WHERE m.session_id = ? AND s.user_id = ?
+        ORDER BY m.id
+        """,
+        (session_id, user_id),
     ).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in rows]
 

@@ -426,37 +426,43 @@ def set_label(
     note_id: int,
     relevant: bool,
     rationale: str = "",
+    user_id: Optional[int] = None,
 ) -> None:
+    user_id = user_id or get_or_create_default_user(conn)
     with transaction(conn):
         conn.execute(
             """
-            INSERT INTO eval_labels (assignment_id, note_id, relevant, rationale)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO eval_labels (user_id, assignment_id, note_id, relevant, rationale)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(assignment_id, note_id)
             DO UPDATE SET relevant = excluded.relevant, rationale = excluded.rationale
             """,
-            (assignment_id, note_id, 1 if relevant else 0, rationale),
+            (user_id, assignment_id, note_id, 1 if relevant else 0, rationale),
         )
 
 
-def list_labels(conn: sqlite3.Connection) -> list[dict]:
+def list_labels(conn: sqlite3.Connection, user_id: int) -> list[dict]:
     rows = conn.execute(
         """
         SELECT l.*, a.name AS assignment_name, n.title AS note_title
         FROM eval_labels l
         JOIN assignments a ON a.id = l.assignment_id
         JOIN notes n ON n.id = l.note_id
+        WHERE l.user_id = ?
         ORDER BY l.assignment_id, l.note_id
-        """
+        """,
+        (user_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def delete_label(conn: sqlite3.Connection, assignment_id: int, note_id: int) -> None:
+def delete_label(
+    conn: sqlite3.Connection, assignment_id: int, note_id: int, user_id: int
+) -> None:
     with transaction(conn):
         conn.execute(
-            "DELETE FROM eval_labels WHERE assignment_id = ? AND note_id = ?",
-            (assignment_id, note_id),
+            "DELETE FROM eval_labels WHERE assignment_id = ? AND note_id = ? AND user_id = ?",
+            (assignment_id, note_id, user_id),
         )
 
 

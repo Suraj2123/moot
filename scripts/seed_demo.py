@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from studylink import store  # noqa: E402
 from studylink.config import load_settings  # noqa: E402
+from studylink.context import UserContext  # noqa: E402
 from studylink.db import reset  # noqa: E402
 from studylink.evaluation.dataset import LabeledPair, save_labels, sync_to_db  # noqa: E402
 from studylink.service import StudyLink  # noqa: E402
@@ -463,10 +464,15 @@ def main() -> int:
 
     if not args.keep:
         reset(app.conn)
+        # reset() clears the users table too, so the context resolved at
+        # construction now points at a row that no longer exists.
+        app.user = UserContext.local(app.conn)
 
     course_ids: dict[str, int] = {}
     for canvas_id, name, code in COURSES:
-        course_ids[canvas_id] = store.upsert_course(app.conn, canvas_id, name, code)
+        course_ids[canvas_id] = store.upsert_course(
+            app.conn, canvas_id, name, code, user_id=app.user_id
+        )
 
     for course_key, canvas_id, name, description, due, points, submission in ASSIGNMENTS:
         store.upsert_assignment(
@@ -479,6 +485,7 @@ def main() -> int:
             points_possible=points,
             submission_types=submission,
             html_url=f"https://canvas.example.edu/courses/{course_key}/assignments/{canvas_id}",
+            user_id=app.user_id,
         )
 
     for course_key, title, source_type, body in NOTES:
@@ -488,10 +495,11 @@ def main() -> int:
             body=body.strip(),
             course_id=course_ids[course_key],
             source_type=source_type,
+            user_id=app.user_id,
         )
 
     save_labels(LABELS, settings.labels_path)
-    written = sync_to_db(app.conn, LABELS)
+    written = sync_to_db(app.conn, LABELS, app.user_id)
 
     stats = app.reindex(force=True)
     status = app.status()
