@@ -59,6 +59,11 @@ class Settings:
     db_path: Path = DEFAULT_DB_PATH
     labels_path: Path = DEFAULT_LABELS_PATH
 
+    # SQLAlchemy URL. Empty means "derive a SQLite URL from db_path", which is
+    # what local development and the test suite use. Setting DATABASE_URL to a
+    # postgresql+psycopg2:// URL is the only change needed to run on Postgres.
+    database_url: str = ""
+
     canvas_api_url: str = ""
     canvas_api_token: str = ""
 
@@ -70,6 +75,17 @@ class Settings:
     anthropic_api_key: str = ""
 
     retrieval: RetrievalConfig = RetrievalConfig()
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        """The URL to connect with, falling back to SQLite at `db_path`."""
+        if self.database_url:
+            return self.database_url
+        return f"sqlite:///{self.db_path}"
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.sqlalchemy_url.startswith("postgres")
 
     @property
     def canvas_configured(self) -> bool:
@@ -108,6 +124,7 @@ def load_settings() -> Settings:
 
     return Settings(
         db_path=Path(os.environ.get("STUDYLINK_DB", str(DEFAULT_DB_PATH))),
+        database_url=os.environ.get("DATABASE_URL", ""),
         labels_path=Path(os.environ.get("STUDYLINK_LABELS", str(DEFAULT_LABELS_PATH))),
         canvas_api_url=os.environ.get("CANVAS_API_URL", "").rstrip("/"),
         canvas_api_token=os.environ.get("CANVAS_API_TOKEN", ""),

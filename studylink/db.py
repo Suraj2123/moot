@@ -16,7 +16,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.pool import NullPool
+
 from .migrations import apply_all
+from .schema import metadata
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -181,3 +185,41 @@ def reset(conn: sqlite3.Connection) -> None:
             "users",
         ):
             conn.execute(f"DELETE FROM {table}")
+
+
+# --------------------------------------------------------------- SQLAlchemy
+
+
+def make_engine(url: str, echo: bool = False) -> Engine:
+    """Build an engine for either backend, with the per-dialect settings each needs.
+
+    SQLite needs foreign keys switched on per connection -- they are off by
+    default, which silently turns every `ON DELETE CASCADE` in the schema into a
+    no-op and lets orphaned rows accumulate.
+
+    Postgres gets `pool_pre_ping` because hosted databases drop idle connections;
+    without it the first request after a quiet period fails with a stale-socket
+    error instead of transparently reconnecting.
+    """
+    if url.startswith("sqlite"):
+        engine = create_engine(url, future=True, echo=echo, poolclass=NullPool)
+
+        @event.listens_for(engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _record):  # pragma: no cover
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
+
+        return engine
+
+    return create_engine(url, future=True, echo=echo, pool_pre_ping=True, pool_size=5)
+
+
+def create_all(engine: Engine) -> None:
+    """Create any missing tables from the schema metadata.
+
+    Convenient for tests and first-run local setup. Anything with data in it
+    should be migrated with Alembic instead, so schema changes are reviewable.
+    """
+    metadata.create_all(engine)
