@@ -1,0 +1,116 @@
+name: tests
+
+# The whole point of this file is the matrix. The app supports SQLite and
+# Postgres from one schema definition, and the only thing that keeps that true
+# is running the suite against both on every push. A green build on SQLite alone
+# would have missed every bug this branch found: the stale cached user_id that
+# only worked because SQLite reuses rowid 1, the raw SQL that SQLite tolerated
+# and Postgres rejected, and the vector column SQLite accepted as a real type
+# because its typing is dynamic.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  sqlite:
+    name: sqlite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Test
+        # No DATABASE_URL and no STUDYLINK_TEST_POSTGRES_URL: the Postgres tests
+        # skip, and this job proves the app still runs with no server at all.
+        run: python -m pytest tests -q
+
+  postgres:
+    name: postgres + pgvector
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # pgvector's own image, so the extension is present without building it.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: studylink_test
+        ports:
+          - 5432:5432
+        # Without a health check the job races the server's startup and fails
+        # intermittently on connection refused.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Two databases on purpose. The suite reaches the schema through
+      # create_all, and Alembic has to start from an empty one -- pointing both
+      # at the same database means the migration step finds the tables already
+      # there and fails on the first CREATE TABLE.
+      TEST_DB: postgresql+psycopg2://postgres:postgres@localhost:5432/studylink_test
+      MIGRATION_DB: postgresql+psycopg2://postgres:postgres@localhost:5432/studylink_migrations
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Test both backends in one run
+        # Setting STUDYLINK_TEST_POSTGRES_URL turns on the Postgres tests without
+        # turning off the SQLite ones, so this run covers both engines in a single
+        # process -- which is also what catches the process-global metadata leak
+        # between them.
+        env:
+          STUDYLINK_TEST_POSTGRES_URL: ${{ env.TEST_DB }}
+        run: python -m pytest tests -q
+
+      - name: Migrations apply from empty, and round-trip
+        # create_all is what the tests use; migrations are what production uses.
+        # They can drift, so exercise the migration path separately on a database
+        # nothing else has touched. The downgrades run too -- a downgrade nobody
+        # ever runs is a downgrade that does not work when it is finally needed.
+        env:
+          DATABASE_URL: ${{ env.MIGRATION_DB }}
+        run: |
+          createdb -h localhost -U postgres studylink_migrations
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+
+      - name: App runs end to end on Postgres
+        env:
+          DATABASE_URL: ${{ env.TEST_DB }}
+        run: |
+          python scripts/seed_demo.py
+          python scripts/run_eval.py
+
+      - name: Retrieval metrics match SQLite
+        # The two backends are only interchangeable if they retrieve the same
+        # things. This fails the build if a storage change quietly moves the
+        # numbers, which is exactly the failure that is otherwise invisible.
+        run: |
+          DATABASE_URL="$TEST_DB" python scripts/seed_demo.py > /dev/null
+          DATABASE_URL="$TEST_DB" python scripts/run_eval.py | sed -n '5,9p' > postgres.txt
+          python scripts/seed_demo.py > /dev/null
+          python scripts/run_eval.py | sed -n '5,9p' > sqlite.txt
+          echo "--- postgres ---"; cat postgres.txt
+          echo "--- sqlite ---";   cat sqlite.txt
+          diff postgres.txt sqlite.txt

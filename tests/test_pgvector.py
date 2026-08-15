@@ -406,9 +406,14 @@ def hnsw_conn(pg_conn, monkeypatch):
 
 
 @requires_postgres
-def test_hnsw_index_is_off_by_default(pg_conn):
+def test_hnsw_index_is_off_by_default(pg_conn, monkeypatch):
     """Default-on would silently cost recall as soon as a corpus grows."""
     from studylink.pgvector_support import ensure_hnsw_index, has_hnsw_index, hnsw_enabled
+
+    # Assert the built-in default rather than whatever the environment is set to.
+    # The opt-in path is covered by the hnsw_conn fixture, which sets the variable
+    # for the tests that need it, so nothing has to enable it globally.
+    monkeypatch.delenv("STUDYLINK_HNSW", raising=False)
 
     assert hnsw_enabled() is False
     assert ensure_hnsw_index(pg_conn) is False
