@@ -48,6 +48,12 @@ def connect(db_path_or_url: Path | str) -> Connection:
     engine = make_engine(url)
     create_all(engine)
     connection = engine.connect()
+
+    # `hnsw.ef_search` is a per-session setting, so it belongs here on the
+    # connection rather than in create_all's short-lived one.
+    from .pgvector_support import apply_search_tuning
+
+    apply_search_tuning(connection)
     # Keep the engine reachable so callers can dispose of it, and so the pool is
     # not garbage-collected out from under a long-lived connection.
     connection.info["engine"] = engine
@@ -114,7 +120,11 @@ def create_all(engine: Engine) -> None:
     """
     metadata.create_all(engine)
 
-    from .pgvector_support import backfill_native_vectors, ensure_vector_column
+    from .pgvector_support import (
+        backfill_native_vectors,
+        ensure_hnsw_index,
+        ensure_vector_column,
+    )
 
     if engine.dialect.name == "postgresql":
         with engine.connect() as conn:
@@ -123,3 +133,4 @@ def create_all(engine: Engine) -> None:
                 # native vector. Fill them now so search can trust the column
                 # instead of quietly ranking a subset of the corpus.
                 backfill_native_vectors(conn)
+                ensure_hnsw_index(conn)

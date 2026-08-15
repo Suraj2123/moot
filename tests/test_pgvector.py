@@ -25,11 +25,13 @@ from studylink import store
 from studylink.db import connect
 from studylink.indexing import Indexer
 from studylink.pgvector_support import (
+    HNSW_INDEX_NAME,
     configured_dim,
     ensure_vector_column,
     extension_available,
     has_vector_column,
     is_postgres,
+    to_pgvector_literal,
     to_vector_param,
 )
 from studylink.schema import embeddings
@@ -366,6 +368,114 @@ def test_backfill_fills_rows_written_before_the_column_existed(pg_corpus, provid
         assert np.allclose(from_blob, from_native, atol=1e-6)
 
     assert backfill_native_vectors(conn) == 0  # idempotent
+
+
+# ----------------------------------------------------------------- hnsw index
+
+
+def test_index_helpers_are_no_ops_on_sqlite(conn):
+    from studylink.pgvector_support import (
+        apply_search_tuning,
+        ensure_hnsw_index,
+        has_hnsw_index,
+    )
+
+    assert has_hnsw_index(conn) is False
+    assert ensure_hnsw_index(conn) is False
+    apply_search_tuning(conn)  # must not raise
+
+
+@requires_postgres
+def test_hnsw_index_exists_and_is_idempotent(pg_conn):
+    from studylink.pgvector_support import ensure_hnsw_index, has_hnsw_index
+
+    assert has_hnsw_index(pg_conn) is True  # connect() created it
+    assert ensure_hnsw_index(pg_conn) is True  # second call changes nothing
+    assert has_hnsw_index(pg_conn) is True
+
+
+@requires_postgres
+def test_hnsw_index_uses_the_cosine_operator_class(pg_conn):
+    """The opclass has to match the operator the search uses.
+
+    Build the index with `vector_l2_ops` and query with `<=>` and Postgres simply
+    never uses it: the rows still come back correct, just from a full sort. That
+    is a performance regression with no failing test and no error message
+    anywhere, so it gets one here.
+    """
+    opclass = pg_conn.execute(
+        text(
+            "SELECT o.opcname FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_opclass o ON o.oid = i.indclass[0] "
+            "WHERE c.relname = :name"
+        ),
+        {"name": HNSW_INDEX_NAME},
+    ).scalar()
+    assert opclass == "vector_cosine_ops"
+
+
+@requires_postgres
+def test_planner_can_reach_the_hnsw_index(pg_conn, provider, config):
+    """A nearest-neighbour query on the bare table must be able to use the index.
+
+    Deliberately not asserted against the query `_search_native` builds: that one
+    joins to the owner table for tenant scoping and the planner will not use the
+    index underneath the join. This asserts the index itself is well-formed and
+    reachable, which is the part that would otherwise break silently.
+    """
+    user_id = store.get_or_create_default_user(pg_conn)
+    for i in range(20):
+        store.create_note(pg_conn, f"Note {i}", f"Topic number {i} about learning.", user_id=user_id)
+    Indexer(pg_conn, provider, config, user_id).reindex()
+    pg_conn.execute(text("ANALYZE embeddings"))
+
+    query = to_pgvector_literal(provider.embed(["learning"])[0])
+    # The table is tiny, so a sequential scan genuinely is cheaper; disable it to
+    # ask the narrower question of whether the index *can* serve this query.
+    pg_conn.execute(text("SET enable_seqscan = off"))
+    try:
+        plan = "\n".join(
+            row[0]
+            for row in pg_conn.execute(
+                text(
+                    "EXPLAIN SELECT owner_id FROM embeddings "
+                    "ORDER BY embedding <=> :q LIMIT 5"
+                ),
+                {"q": query},
+            )
+        )
+    finally:
+        pg_conn.execute(text("SET enable_seqscan = on"))
+
+    assert HNSW_INDEX_NAME in plan, plan
+
+
+@requires_postgres
+def test_connections_carry_the_configured_ef_search(pg_conn):
+    """It is a per-session GUC, so it has to be set on every connection."""
+    from studylink.pgvector_support import configured_ef_search
+
+    assert int(pg_conn.execute(text("SHOW hnsw.ef_search")).scalar()) == configured_ef_search()
+
+
+@requires_postgres
+def test_ef_search_leaves_room_above_top_k(pg_corpus, provider):
+    """ef_search below the LIMIT caps how many rows HNSW can return at all.
+
+    The tenant predicate discards candidates after the index produces them, so
+    the margin has to cover that too -- this asserts the default is not merely
+    equal to a typical top_k.
+    """
+    from studylink.pgvector_support import configured_ef_search
+
+    assert configured_ef_search() >= 10 * config_top_k()
+
+
+def config_top_k() -> int:
+    from studylink.config import RetrievalConfig
+
+    return RetrievalConfig().top_k
 
 
 @requires_postgres
