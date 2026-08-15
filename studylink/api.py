@@ -10,14 +10,19 @@ lines over `StudyLink`.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from .agent import AgentUnavailable, citation_coverage
 from .canvas import CanvasError
 from .context import UserContext
+from .errors import CrossUserAccessError, NotFoundError
 from .service import StudyLink
 
 api = FastAPI(title="StudyLink", version="0.1.0")
@@ -50,6 +55,26 @@ class WorkSessionIn(BaseModel):
     assignment_id: int
     mode: str = Field(default="outline", pattern="^(outline|draft|summary)$")
     top_k: Optional[int] = None
+
+
+@api.exception_handler(CrossUserAccessError)
+def _cross_user(request, exc: CrossUserAccessError):
+    """Deliberately a 404, not a 403.
+
+    A 403 tells the caller the row exists and belongs to somebody else, which is
+    precisely the fact worth hiding. The event is logged server-side with both
+    user ids; the client learns only that there is nothing here for them.
+    """
+    logger.warning(
+        "cross-user access blocked: %s %s owned by %s, requested by %s",
+        exc.table, exc.row_id, exc.owner_id, exc.actor_id,
+    )
+    return JSONResponse(status_code=404, content={"detail": "not found"})
+
+
+@api.exception_handler(NotFoundError)
+def _not_found(request, exc: NotFoundError):
+    return JSONResponse(status_code=404, content={"detail": "not found"})
 
 
 @api.get("/health")
@@ -90,10 +115,8 @@ def list_assignments(course_id: Optional[int] = None) -> list[dict]:
 @api.get("/assignments/{assignment_id}/matches")
 def assignment_matches(assignment_id: int, top_k: Optional[int] = None) -> dict:
     app = get_app()
-    assignment = app.get_assignment(assignment_id)
-    if assignment is None:
-        raise HTTPException(status_code=404, detail="assignment not found")
     matches = app.matches_for_assignment(assignment_id, top_k=top_k)
+    assignment = app.get_assignment(assignment_id)
     return {
         "assignment": {"id": assignment.id, "name": assignment.name},
         "matches": [m.as_dict() for m in matches],
@@ -125,8 +148,6 @@ def create_note(payload: NoteIn) -> dict:
 @api.get("/notes/{note_id}/assignments")
 def reverse_lookup(note_id: int, top_k: int = 5) -> list[dict]:
     app = get_app()
-    if app.get_note(note_id) is None:
-        raise HTTPException(status_code=404, detail="note not found")
     return [
         {
             "assignment_id": m.assignment.id,

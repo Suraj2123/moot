@@ -19,6 +19,7 @@ from .config import RetrievalConfig, Settings, load_settings
 from .context import UserContext
 from .db import connect
 from .embeddings import build_provider
+from .errors import CrossUserAccessError, NotFoundError, assert_owned
 from .evaluation.dataset import load_labels, sync_to_db
 from .evaluation.runner import EvalReport, evaluate_config, sweep
 from .indexing import Indexer, IndexStats
@@ -104,6 +105,7 @@ class StudyLink:
         return note_id
 
     def delete_note(self, note_id: int) -> None:
+        assert_owned(self.conn, "notes", note_id, self.user_id)
         store.delete_note(self.conn, note_id, self.user_id)
 
     def list_notes(self, course_id: Optional[int] = None, search: str = "") -> list[Note]:
@@ -131,15 +133,17 @@ class StudyLink:
     def matches_for_assignment(
         self, assignment_id: int, top_k: Optional[int] = None
     ) -> list[NoteMatch]:
+        assert_owned(self.conn, "assignments", assignment_id, self.user_id)
         assignment = store.get_assignment(self.conn, assignment_id, self.user_id)
-        if assignment is None:
-            return []
+        if assignment is None:  # pragma: no cover - assert_owned already raised
+            raise NotFoundError("assignments", assignment_id)
         return self.retriever.notes_for_assignment(assignment, top_k=top_k)
 
     def assignments_for_note(self, note_id: int, top_k: int = 5) -> list[AssignmentMatch]:
+        assert_owned(self.conn, "notes", note_id, self.user_id)
         note = store.get_note(self.conn, note_id, self.user_id)
-        if note is None:
-            return []
+        if note is None:  # pragma: no cover - assert_owned already raised
+            raise NotFoundError("notes", note_id)
         return self.retriever.assignments_for_note(note, top_k=top_k)
 
     def search_notes(self, query: str, top_k: int = 5) -> list[NoteMatch]:
