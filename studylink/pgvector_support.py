@@ -77,6 +77,70 @@ def ensure_vector_column(conn: Connection, dim: int | None = None) -> bool:
     return True
 
 
+def backfill_native_vectors(conn: Connection, batch_size: int = 500) -> int:
+    """Copy the portable blob into the native column for rows that predate it.
+
+    Migration 0002 adds the column but cannot fill it: the blob is a packed
+    float32 buffer, and unpacking it is Python's job, not SQL's. Without this, a
+    database that had embeddings before the migration ends up with a column that
+    is half NULL -- and a search that reads the native column would silently
+    return fewer results rather than fail, which is the worst way for this to go
+    wrong.
+
+    So the search path is allowed to trust the column completely, and this is what
+    earns that trust. Runs on connect; after the first pass the WHERE matches
+    nothing and it costs one indexed lookup. Returns the number of rows filled.
+    """
+    if not has_vector_column(conn):
+        return 0
+
+    import numpy as np
+
+    filled = 0
+    while True:
+        rows = conn.execute(
+            text(
+                "SELECT owner_type, owner_id, model, vector FROM embeddings "
+                "WHERE embedding IS NULL LIMIT :n"
+            ),
+            {"n": batch_size},
+        ).all()
+        if not rows:
+            break
+
+        conn.execute(
+            text(
+                "UPDATE embeddings SET embedding = :embedding "
+                "WHERE owner_type = :owner_type AND owner_id = :owner_id "
+                "AND model = :model"
+            ),
+            [
+                {
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "model": model,
+                    "embedding": to_pgvector_literal(
+                        np.frombuffer(blob, dtype=np.float32)
+                    ),
+                }
+                for owner_type, owner_id, model, blob in rows
+            ],
+        )
+        conn.commit()
+        filled += len(rows)
+
+    return filled
+
+
+def to_pgvector_literal(values) -> str:
+    """Render a vector in pgvector's text input format: `[1,2,3]`.
+
+    Needed for `text()` queries, where there is no `Vector` column type in play
+    to do the encoding -- psycopg2 has no adapter for a bare ndarray.
+    """
+    return "[" + ",".join(repr(float(v)) for v in values) + "]"
+
+
 def to_vector_param(values) -> "np.ndarray":
     """Coerce a vector into something the `Vector` column type will accept.
 

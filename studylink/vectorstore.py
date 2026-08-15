@@ -17,6 +17,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 from sqlalchemy import Connection, delete, func, select
+from sqlalchemy.exc import DBAPIError
 
 from .db import transaction
 from .pgvector_support import has_vector_column, to_vector_param
@@ -150,8 +151,96 @@ class VectorStore:
     ) -> list[tuple[int, float]]:
         """Exact cosine search over one user's vectors.
 
-        Vectors are stored L2-normalised, so this is a dot product.
+        Two implementations, one meaning. On Postgres the ranking happens in the
+        database; everywhere else it happens in numpy. Both are exact and both
+        return the same rows in the same order, so this is a change in where the
+        work runs, not in what the retriever returns -- which is the only reason
+        the eval numbers stay comparable across backends.
         """
+        if has_vector_column(self.conn):
+            return self._search_native(
+                query, owner_type, model, user_id, top_k, exclude_ids
+            )
+        return self._search_numpy(
+            query, owner_type, model, user_id, top_k, exclude_ids
+        )
+
+    def _search_native(
+        self,
+        query: np.ndarray,
+        owner_type: str,
+        model: str,
+        user_id: int,
+        top_k: int,
+        exclude_ids: Iterable[int],
+    ) -> list[tuple[int, float]]:
+        """Rank inside Postgres with pgvector's cosine-distance operator.
+
+        The numpy path has to ship every one of the user's vectors over the wire
+        and sort them all to return five. This sends the query vector down and
+        gets five rows back, and once commit 7 adds the HNSW index the sort stops
+        being a full scan as well.
+
+        Vectors are stored L2-normalised, so `1 - cosine_distance` is exactly the
+        dot product the numpy path computes.
+        """
+        owner = _owner_table(owner_type)
+        distance = embeddings.c.embedding.cosine_distance(to_vector_param(query))
+
+        statement = (
+            select(embeddings.c.owner_id, (1 - distance).label("score"))
+            # The join is what scopes this to one user. It is not an optimisation
+            # and must not be dropped: embeddings carry no user column of their
+            # own, so without it this ranks the whole table.
+            .join(owner, owner.c.id == embeddings.c.owner_id)
+            .where(
+                embeddings.c.owner_type == owner_type,
+                embeddings.c.model == model,
+                owner.c.user_id == user_id,
+            )
+            # owner_id breaks ties deterministically; equal distances would
+            # otherwise come back in whatever order the scan produced.
+            .order_by(distance, embeddings.c.owner_id)
+            .limit(top_k)
+        )
+
+        excluded = [int(i) for i in exclude_ids]
+        if excluded:
+            statement = statement.where(embeddings.c.owner_id.notin_(excluded))
+
+        try:
+            rows = self.conn.execute(statement).all()
+        except DBAPIError as exc:
+            # A dimension mismatch is a user-facing mistake (changed embedding
+            # model, did not reindex), so turn Postgres's error into the same
+            # message the numpy path gives. The failed statement has aborted the
+            # transaction, so it has to be rolled back before the connection is
+            # usable again.
+            self.conn.rollback()
+            stored = self.conn.execute(
+                select(embeddings.c.dim)
+                .where(embeddings.c.owner_type == owner_type, embeddings.c.model == model)
+                .limit(1)
+            ).scalar()
+            if stored is not None and stored != query.shape[0]:
+                raise ValueError(
+                    f"Dimension mismatch: stored vectors are {stored}-d but the query is "
+                    f"{query.shape[0]}-d. Re-index after changing embedding models."
+                ) from exc
+            raise
+
+        return [(int(owner_id), float(score)) for owner_id, score in rows]
+
+    def _search_numpy(
+        self,
+        query: np.ndarray,
+        owner_type: str,
+        model: str,
+        user_id: int,
+        top_k: int,
+        exclude_ids: Iterable[int],
+    ) -> list[tuple[int, float]]:
+        """Exact cosine search in Python. The only path on SQLite."""
         ids, matrix = self.matrix(owner_type, model, user_id)
         if not ids:
             return []

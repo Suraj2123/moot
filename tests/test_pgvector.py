@@ -199,6 +199,175 @@ def test_postgres_metadata_does_not_leak_a_vector_type_into_sqlite(pg_conn, tmp_
         sqlite_conn.close()
 
 
+# ------------------------------------------------- native search equivalence
+
+
+@pytest.fixture
+def pg_corpus(pg_conn, provider, config):
+    """One user, three notes on clearly different topics, indexed on Postgres."""
+    user_id = store.get_or_create_default_user(pg_conn)
+    course = store.upsert_course(pg_conn, "1", "CS 101", "CS101", user_id=user_id)
+    for title, body in [
+        ("Gradient descent", "Gradient descent minimises a loss by stepping downhill. "
+                             "The learning rate alpha controls the step size."),
+        ("Alliances", "By 1907 Europe had split into two blocs: the Triple Alliance "
+                      "faced the Triple Entente."),
+        ("Marshall Plan", "The Marshall Plan transferred aid to western Europe after "
+                          "1945 and tied recipient economies to the United States."),
+    ]:
+        store.create_note(pg_conn, title, body, course_id=course, user_id=user_id)
+    Indexer(pg_conn, provider, config, user_id).reindex()
+    return {"conn": pg_conn, "user_id": user_id, "course": course}
+
+
+def _query_vector(pg_corpus, provider):
+    return provider.embed(["learning rate and gradient descent convergence"])[0]
+
+
+@requires_postgres
+def test_native_search_matches_numpy_exactly(pg_corpus, provider):
+    """The whole justification for this commit: same answers, different machine.
+
+    Comparing the two implementations against each other on the same rows is the
+    only assertion that actually protects the eval numbers -- if pgvector ranked
+    even slightly differently, every metric in the report would shift for a
+    reason that has nothing to do with retrieval quality.
+    """
+    from studylink.vectorstore import VectorStore
+
+    conn, user_id = pg_corpus["conn"], pg_corpus["user_id"]
+    store_ = VectorStore(conn)
+    query = _query_vector(pg_corpus, provider)
+
+    native = store_.search(query, "chunk", provider.name, user_id, top_k=10)
+    numpy_path = store_._search_numpy(query, "chunk", provider.name, user_id, 10, ())
+
+    assert [oid for oid, _ in native] == [oid for oid, _ in numpy_path]
+    for (_, a), (_, b) in zip(native, numpy_path):
+        assert a == pytest.approx(b, abs=1e-6)
+
+
+@requires_postgres
+def test_native_search_is_actually_the_path_taken(pg_corpus, provider):
+    """Guard against the dispatch silently falling back to numpy on Postgres."""
+    from studylink.vectorstore import VectorStore
+
+    assert has_vector_column(pg_corpus["conn"]) is True
+    calls = []
+    store_ = VectorStore(pg_corpus["conn"])
+    original = store_._search_numpy
+    store_._search_numpy = lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+
+    store_.search(_query_vector(pg_corpus, provider), "chunk", provider.name,
+                  pg_corpus["user_id"], top_k=3)
+
+    assert calls == [], "search fell back to the numpy path on Postgres"
+
+
+@requires_postgres
+def test_native_search_honours_top_k_and_exclusions(pg_corpus, provider):
+    from studylink.vectorstore import VectorStore
+
+    store_ = VectorStore(pg_corpus["conn"])
+    query = _query_vector(pg_corpus, provider)
+
+    everything = store_.search(query, "chunk", provider.name, pg_corpus["user_id"], top_k=50)
+    assert len(everything) >= 3
+
+    assert len(store_.search(query, "chunk", provider.name, pg_corpus["user_id"], top_k=2)) == 2
+
+    dropped = everything[0][0]
+    remaining = store_.search(
+        query, "chunk", provider.name, pg_corpus["user_id"], top_k=50, exclude_ids=[dropped]
+    )
+    assert dropped not in [oid for oid, _ in remaining]
+    assert len(remaining) == len(everything) - 1
+
+
+@requires_postgres
+def test_native_search_does_not_cross_users(pg_conn, provider, config):
+    """The join is the isolation boundary. This is the test that says so.
+
+    Both users get a note on the same topic, so a missing scope predicate ranks
+    the other user's chunks highly rather than harmlessly returning nothing.
+    """
+    from studylink.vectorstore import VectorStore
+
+    alice = store.create_user(pg_conn, email="alice@example.edu")
+    bob = store.create_user(pg_conn, email="bob@example.edu")
+    for user, marker in [(alice, "ALICE-SECRET-TOKEN"), (bob, "BOB-SECRET-TOKEN")]:
+        course = store.upsert_course(pg_conn, "101", "CS 101", "CS101", user_id=user)
+        store.create_note(
+            pg_conn,
+            f"{marker} notes",
+            "Gradient descent steps downhill; the learning rate alpha controls "
+            f"the step size. {marker}",
+            course_id=course,
+            user_id=user,
+        )
+        Indexer(pg_conn, provider, config, user).reindex()
+
+    store_ = VectorStore(pg_conn)
+    query = provider.embed(["gradient descent learning rate"])[0]
+
+    alice_hits = {oid for oid, _ in store_.search(query, "chunk", provider.name, alice, top_k=50)}
+    bob_hits = {oid for oid, _ in store_.search(query, "chunk", provider.name, bob, top_k=50)}
+
+    assert alice_hits and bob_hits
+    assert alice_hits.isdisjoint(bob_hits)
+
+
+@requires_postgres
+def test_native_search_reports_a_dimension_mismatch_clearly(pg_corpus, provider):
+    """Changing embedding model without reindexing must not surface as SQL noise."""
+    from studylink.vectorstore import VectorStore
+
+    store_ = VectorStore(pg_corpus["conn"])
+    wrong_width = np.ones(configured_dim() + 8, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="Re-index after changing embedding models"):
+        store_.search(wrong_width, "chunk", provider.name, pg_corpus["user_id"], top_k=5)
+
+    # The connection has to survive the failure, not stay in an aborted transaction.
+    assert store_.count("chunk", provider.name, pg_corpus["user_id"]) > 0
+
+
+@requires_postgres
+def test_backfill_fills_rows_written_before_the_column_existed(pg_corpus, provider):
+    """Simulates migrating a database that already had embeddings.
+
+    A half-filled column is the dangerous state: search would return a subset of
+    the corpus and look like it worked.
+    """
+    from studylink.pgvector_support import backfill_native_vectors
+
+    conn = pg_corpus["conn"]
+    conn.execute(text("UPDATE embeddings SET embedding = NULL"))
+    conn.commit()
+
+    missing = conn.execute(
+        text("SELECT count(*) FROM embeddings WHERE embedding IS NULL")
+    ).scalar()
+    assert missing > 0
+
+    assert backfill_native_vectors(conn) == missing
+    assert conn.execute(
+        text("SELECT count(*) FROM embeddings WHERE embedding IS NULL")
+    ).scalar() == 0
+
+    # And the backfilled vectors must equal the blobs they came from.
+    for blob, native in conn.execute(
+        text("SELECT vector, embedding::text FROM embeddings")
+    ).all():
+        from_blob = np.frombuffer(blob, dtype=np.float32)
+        from_native = np.array(
+            [float(x) for x in native.strip("[]").split(",")], dtype=np.float32
+        )
+        assert np.allclose(from_blob, from_native, atol=1e-6)
+
+    assert backfill_native_vectors(conn) == 0  # idempotent
+
+
 @requires_postgres
 def test_native_column_uses_the_configured_dimension(pg_conn):
     """pgvector can only index a column with a declared dimension."""

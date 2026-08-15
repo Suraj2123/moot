@@ -114,8 +114,12 @@ def create_all(engine: Engine) -> None:
     """
     metadata.create_all(engine)
 
-    from .pgvector_support import ensure_vector_column
+    from .pgvector_support import backfill_native_vectors, ensure_vector_column
 
     if engine.dialect.name == "postgresql":
         with engine.connect() as conn:
-            ensure_vector_column(conn)
+            if ensure_vector_column(conn):
+                # Rows written before the column existed have a blob but no
+                # native vector. Fill them now so search can trust the column
+                # instead of quietly ranking a subset of the corpus.
+                backfill_native_vectors(conn)
