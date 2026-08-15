@@ -36,8 +36,9 @@ def config():
 @pytest.fixture
 def corpus(conn, provider, config):
     """A tiny two-course corpus with one obvious match per assignment."""
-    cs = store.upsert_course(conn, "1", "CS 101: Machine Learning", "CS101")
-    hist = store.upsert_course(conn, "2", "HIST 200: European History", "HIST200")
+    user_id = store.get_or_create_default_user(conn)
+    cs = store.upsert_course(conn, "1", "CS 101: Machine Learning", "CS101", user_id=user_id)
+    hist = store.upsert_course(conn, "2", "HIST 200: European History", "HIST200", user_id=user_id)
 
     gradient_assignment = store.upsert_assignment(
         conn,
@@ -80,11 +81,12 @@ def corpus(conn, provider, config):
         course_id=hist,
     )
 
-    Indexer(conn, provider, config).reindex()
+    Indexer(conn, provider, config, user_id).reindex()
 
     return {
         "conn": conn,
-        "retriever": Retriever(conn, provider, config),
+        "user_id": user_id,
+        "retriever": Retriever(conn, provider, config, user_id),
         "cs": cs,
         "hist": hist,
         "gradient_assignment": gradient_assignment,

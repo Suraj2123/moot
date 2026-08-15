@@ -99,6 +99,7 @@ def test_evaluate_config_end_to_end(corpus, tmp_path):
         build_provider("hash", "hash-256"),
         RetrievalConfig(chunk_size=60, chunk_overlap=10, top_k=2, score_threshold=0.05),
         labels_path,
+        corpus["user_id"],
     )
 
     assert report.n_positive_labels == 2
@@ -127,6 +128,7 @@ def test_unresolvable_labels_are_reported_not_dropped(corpus, tmp_path):
         build_provider("hash", "hash-256"),
         RetrievalConfig(chunk_size=60, chunk_overlap=10, top_k=2, score_threshold=0.05),
         labels_path,
+        corpus["user_id"],
     )
     assert len(report.unresolved_labels) == 1
     assert "Assignment That Does Not Exist" in report.unresolved_labels[0]

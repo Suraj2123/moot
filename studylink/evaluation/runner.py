@@ -80,15 +80,16 @@ def evaluate_config(
     provider: EmbeddingProvider,
     config: RetrievalConfig,
     labels_path: Path,
+    user_id: int,
     reindex: bool = True,
 ) -> EvalReport:
     """Index under `config`, retrieve for every labelled assignment, score the rankings."""
     if reindex:
-        Indexer(conn, provider, config).reindex()
+        Indexer(conn, provider, config, user_id).reindex()
 
     pairs = load_labels(labels_path)
-    positives, negatives, unresolved = resolve_labels(conn, pairs)
-    retriever = Retriever(conn, provider, config)
+    positives, negatives, unresolved = resolve_labels(conn, pairs, user_id)
+    retriever = Retriever(conn, provider, config, user_id)
 
     # Rank deeper than k so MRR and MAP can see relevant notes that fall just
     # outside the displayed window; @k metrics still use the top k.
@@ -98,7 +99,7 @@ def evaluate_config(
     judged_metrics: list[RankingMetrics] = []
 
     for assignment_id, relevant in sorted(positives.items()):
-        assignment = store.get_assignment(conn, assignment_id)
+        assignment = store.get_assignment(conn, assignment_id, user_id)
         if assignment is None:
             continue
 
@@ -148,6 +149,7 @@ def sweep(
     conn: sqlite3.Connection,
     provider: EmbeddingProvider,
     labels_path: Path,
+    user_id: int,
     base: Optional[RetrievalConfig] = None,
     chunk_sizes: Sequence[int] = (120, 180, 300),
     chunk_overlaps: Sequence[int] = (20, 40),
@@ -172,7 +174,7 @@ def sweep(
                 score_threshold=threshold,
                 top_k=top_k or base.top_k,
             )
-            reports.append(evaluate_config(conn, provider, config, labels_path))
+            reports.append(evaluate_config(conn, provider, config, labels_path, user_id))
 
     k = (top_k or base.top_k)
     reports.sort(key=lambda r: r.macro.get(f"recall@{k}", 0.0), reverse=True)

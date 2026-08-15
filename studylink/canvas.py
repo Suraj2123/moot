@@ -121,7 +121,7 @@ class CanvasClient:
         return response.json()
 
 
-def sync_all(conn: sqlite3.Connection, client: CanvasClient) -> SyncResult:
+def sync_all(conn: sqlite3.Connection, client: CanvasClient, user_id: int) -> SyncResult:
     """Pull every active course and its assignments into the local database."""
     errors: list[str] = []
     course_count = 0
@@ -135,6 +135,7 @@ def sync_all(conn: sqlite3.Connection, client: CanvasClient) -> SyncResult:
                 canvas_id=str(course["id"]),
                 name=name,
                 course_code=course.get("course_code") or "",
+                user_id=user_id,
             )
         except Exception as exc:  # a malformed course should not abort the whole sync
             errors.append(f"course {course.get('id')}: {exc}")
@@ -159,6 +160,7 @@ def sync_all(conn: sqlite3.Connection, client: CanvasClient) -> SyncResult:
                     points_possible=assignment.get("points_possible"),
                     submission_types=",".join(assignment.get("submission_types") or []),
                     html_url=assignment.get("html_url"),
+                    user_id=user_id,
                 )
                 assignment_count += 1
             except Exception as exc:

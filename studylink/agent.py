@@ -378,9 +378,11 @@ def load_messages(conn: sqlite3.Connection, session_id: int) -> list[dict]:
     return [{"role": r["role"], "content": r["content"]} for r in rows]
 
 
-def resolve_citations(conn: sqlite3.Connection, note_ids: list[int]) -> list[dict]:
+def resolve_citations(
+    conn: sqlite3.Connection, note_ids: list[int], user_id: int
+) -> list[dict]:
     """Turn cited ids into displayable references, flagging any that do not exist."""
-    notes = store.get_notes(conn, note_ids)
+    notes = store.get_notes(conn, note_ids, user_id)
     out = []
     for note_id in note_ids:
         note = notes.get(note_id)

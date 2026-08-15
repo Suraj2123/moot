@@ -38,7 +38,7 @@ def test_citation_coverage_clean_output():
 
 
 def test_resolve_citations_marks_unknown_notes(corpus):
-    resolved = resolve_citations(corpus["conn"], [corpus["gradient_note"], 9999])
+    resolved = resolve_citations(corpus["conn"], [corpus["gradient_note"], 9999], corpus["user_id"])
     assert resolved[0]["valid"] is True
     assert resolved[1]["valid"] is False
 
@@ -47,7 +47,7 @@ def test_resolve_citations_marks_unknown_notes(corpus):
 
 
 def test_prompt_includes_assignment_and_note_ids(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"], corpus["user_id"])
     matches = corpus["retriever"].notes_for_assignment(assignment, apply_threshold=False)
     agent = WorkSessionAgent(corpus["conn"], corpus["retriever"])
 
@@ -58,7 +58,7 @@ def test_prompt_includes_assignment_and_note_ids(corpus):
 
 
 def test_note_context_is_truncated_but_labelled(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"], corpus["user_id"])
     matches = corpus["retriever"].notes_for_assignment(assignment, apply_threshold=False)
 
     context = format_note_context(matches, max_chars=50)

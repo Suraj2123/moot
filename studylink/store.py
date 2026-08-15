@@ -85,8 +85,10 @@ def upsert_course(
     return int(row["id"])
 
 
-def list_courses(conn: sqlite3.Connection) -> list[Course]:
-    rows = conn.execute("SELECT * FROM courses ORDER BY name").fetchall()
+def list_courses(conn: sqlite3.Connection, user_id: int) -> list[Course]:
+    rows = conn.execute(
+        "SELECT * FROM courses WHERE user_id = ? ORDER BY name", (user_id,)
+    ).fetchall()
     return [
         Course(
             id=r["id"],
@@ -99,8 +101,10 @@ def list_courses(conn: sqlite3.Connection) -> list[Course]:
     ]
 
 
-def get_course(conn: sqlite3.Connection, course_id: int) -> Optional[Course]:
-    row = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+def get_course(conn: sqlite3.Connection, course_id: int, user_id: int) -> Optional[Course]:
+    row = conn.execute(
+        "SELECT * FROM courses WHERE id = ? AND user_id = ?", (course_id, user_id)
+    ).fetchone()
     if not row:
         return None
     return Course(
@@ -186,19 +190,25 @@ _ASSIGNMENT_SELECT = """
 """
 
 
-def list_assignments(conn: sqlite3.Connection, course_id: Optional[int] = None) -> list[Assignment]:
-    sql = _ASSIGNMENT_SELECT
-    params: tuple = ()
+def list_assignments(
+    conn: sqlite3.Connection, user_id: int, course_id: Optional[int] = None
+) -> list[Assignment]:
+    sql = _ASSIGNMENT_SELECT + " WHERE a.user_id = ?"
+    params: tuple = (user_id,)
     if course_id is not None:
-        sql += " WHERE a.course_id = ?"
-        params = (course_id,)
+        sql += " AND a.course_id = ?"
+        params = (user_id, course_id)
     # NULL due dates sort last so upcoming work leads the dashboard.
     sql += " ORDER BY (a.due_at IS NULL), a.due_at, a.name"
     return [_assignment_from_row(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def get_assignment(conn: sqlite3.Connection, assignment_id: int) -> Optional[Assignment]:
-    row = conn.execute(_ASSIGNMENT_SELECT + " WHERE a.id = ?", (assignment_id,)).fetchone()
+def get_assignment(
+    conn: sqlite3.Connection, assignment_id: int, user_id: int
+) -> Optional[Assignment]:
+    row = conn.execute(
+        _ASSIGNMENT_SELECT + " WHERE a.id = ? AND a.user_id = ?", (assignment_id, user_id)
+    ).fetchone()
     return _assignment_from_row(row) if row else None
 
 
@@ -246,16 +256,23 @@ def create_note(
     return int(cursor.lastrowid)
 
 
-def update_note(conn: sqlite3.Connection, note_id: int, title: str, body: str) -> None:
+def update_note(
+    conn: sqlite3.Connection, note_id: int, title: str, body: str, user_id: int
+) -> None:
     with transaction(conn):
         conn.execute(
-            "UPDATE notes SET title = ?, body = ? WHERE id = ?",
-            (title, body, note_id),
+            "UPDATE notes SET title = ?, body = ? WHERE id = ? AND user_id = ?",
+            (title, body, note_id, user_id),
         )
 
 
-def delete_note(conn: sqlite3.Connection, note_id: int) -> None:
-    chunk_ids = [r["id"] for r in conn.execute("SELECT id FROM chunks WHERE note_id = ?", (note_id,))]
+def delete_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> None:
+    chunk_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE note_id = ? AND user_id = ?", (note_id, user_id)
+        )
+    ]
     with transaction(conn):
         if chunk_ids:
             placeholders = ",".join("?" for _ in chunk_ids)
@@ -263,18 +280,19 @@ def delete_note(conn: sqlite3.Connection, note_id: int) -> None:
                 f"DELETE FROM embeddings WHERE owner_type = 'chunk' AND owner_id IN ({placeholders})",
                 chunk_ids,
             )
-        conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        conn.execute("DELETE FROM notes WHERE id = ? AND user_id = ?", (note_id, user_id))
 
 
 def list_notes(
     conn: sqlite3.Connection,
+    user_id: int,
     course_id: Optional[int] = None,
     search: str = "",
     source_type: Optional[str] = None,
 ) -> list[Note]:
     sql = _NOTE_SELECT
-    clauses: list[str] = []
-    params: list = []
+    clauses: list[str] = ["n.user_id = ?"]
+    params: list = [user_id]
     if course_id is not None:
         clauses.append("n.course_id = ?")
         params.append(course_id)
@@ -285,23 +303,29 @@ def list_notes(
         clauses.append("(n.title LIKE ? OR n.body LIKE ?)")
         needle = f"%{search.strip()}%"
         params.extend([needle, needle])
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
+    sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY n.created_at DESC, n.id DESC"
     return [_note_from_row(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def get_note(conn: sqlite3.Connection, note_id: int) -> Optional[Note]:
-    row = conn.execute(_NOTE_SELECT + " WHERE n.id = ?", (note_id,)).fetchone()
+def get_note(conn: sqlite3.Connection, note_id: int, user_id: int) -> Optional[Note]:
+    row = conn.execute(
+        _NOTE_SELECT + " WHERE n.id = ? AND n.user_id = ?", (note_id, user_id)
+    ).fetchone()
     return _note_from_row(row) if row else None
 
 
-def get_notes(conn: sqlite3.Connection, note_ids: Iterable[int]) -> dict[int, Note]:
+def get_notes(
+    conn: sqlite3.Connection, note_ids: Iterable[int], user_id: int
+) -> dict[int, Note]:
     ids = [int(i) for i in note_ids]
     if not ids:
         return {}
     placeholders = ",".join("?" for _ in ids)
-    rows = conn.execute(_NOTE_SELECT + f" WHERE n.id IN ({placeholders})", ids).fetchall()
+    rows = conn.execute(
+        _NOTE_SELECT + f" WHERE n.id IN ({placeholders}) AND n.user_id = ?",
+        [*ids, user_id],
+    ).fetchall()
     return {r["id"]: _note_from_row(r) for r in rows}
 
 
@@ -344,34 +368,49 @@ def _chunk_from_row(row: sqlite3.Row) -> Chunk:
     return Chunk(id=row["id"], note_id=row["note_id"], ordinal=row["ordinal"], text=row["text"])
 
 
-def list_chunks(conn: sqlite3.Connection, note_id: Optional[int] = None) -> list[Chunk]:
-    sql = "SELECT * FROM chunks"
-    params: tuple = ()
+def list_chunks(
+    conn: sqlite3.Connection, user_id: int, note_id: Optional[int] = None
+) -> list[Chunk]:
+    sql = "SELECT * FROM chunks WHERE user_id = ?"
+    params: tuple = (user_id,)
     if note_id is not None:
-        sql += " WHERE note_id = ?"
-        params = (note_id,)
+        sql += " AND note_id = ?"
+        params = (user_id, note_id)
     sql += " ORDER BY note_id, ordinal"
     return [_chunk_from_row(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def get_chunks(conn: sqlite3.Connection, chunk_ids: Iterable[int]) -> dict[int, Chunk]:
+def get_chunks(
+    conn: sqlite3.Connection, chunk_ids: Iterable[int], user_id: int
+) -> dict[int, Chunk]:
     ids = [int(i) for i in chunk_ids]
     if not ids:
         return {}
     placeholders = ",".join("?" for _ in ids)
-    rows = conn.execute(f"SELECT * FROM chunks WHERE id IN ({placeholders})", ids).fetchall()
+    rows = conn.execute(
+        f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND user_id = ?",
+        [*ids, user_id],
+    ).fetchall()
     return {r["id"]: _chunk_from_row(r) for r in rows}
 
 
-def chunk_note_map(conn: sqlite3.Connection) -> dict[int, int]:
+def chunk_note_map(conn: sqlite3.Connection, user_id: int) -> dict[int, int]:
     """chunk_id -> note_id, for aggregating chunk hits up to notes."""
-    return {r["id"]: r["note_id"] for r in conn.execute("SELECT id, note_id FROM chunks")}
+    return {
+        r["id"]: r["note_id"]
+        for r in conn.execute(
+            "SELECT id, note_id FROM chunks WHERE user_id = ?", (user_id,)
+        )
+    }
 
 
-def chunking_params_in_use(conn: sqlite3.Connection) -> Optional[tuple[int, int]]:
+def chunking_params_in_use(
+    conn: sqlite3.Connection, user_id: int
+) -> Optional[tuple[int, int]]:
     """The (size, overlap) the current chunks were built with, if consistent."""
     row = conn.execute(
-        "SELECT DISTINCT chunk_size, chunk_overlap FROM chunks LIMIT 2"
+        "SELECT DISTINCT chunk_size, chunk_overlap FROM chunks WHERE user_id = ? LIMIT 2",
+        (user_id,),
     ).fetchall()
     if len(row) == 1:
         return int(row[0]["chunk_size"]), int(row[0]["chunk_overlap"])

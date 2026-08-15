@@ -344,7 +344,7 @@ def view_work_session() -> None:
             coverage = citation_coverage(session["output"], session["offered"])
             with st.container(border=True):
                 st.caption("Traceability")
-                cited = resolve_citations(app.conn, coverage["cited"])
+                cited = resolve_citations(app.conn, coverage["cited"], app.user_id)
                 if cited:
                     for item in cited:
                         marker = "✓" if item["valid"] else "⚠"

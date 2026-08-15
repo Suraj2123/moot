@@ -10,7 +10,7 @@ from studylink.vectorstore import VectorStore
 
 
 def test_assignment_retrieves_its_own_course_notes_first(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"], corpus["user_id"])
     matches = corpus["retriever"].notes_for_assignment(assignment, apply_threshold=False)
 
     assert matches, "expected at least one match"
@@ -18,7 +18,7 @@ def test_assignment_retrieves_its_own_course_notes_first(corpus):
 
 
 def test_history_assignment_does_not_rank_the_ml_note_first(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["essay_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["essay_assignment"], corpus["user_id"])
     matches = corpus["retriever"].notes_for_assignment(assignment, apply_threshold=False)
 
     assert matches[0].note.id == corpus["alliance_note"]
@@ -27,7 +27,7 @@ def test_history_assignment_does_not_rank_the_ml_note_first(corpus):
 
 
 def test_reverse_lookup_finds_the_right_assignment(corpus):
-    note = store.get_note(corpus["conn"], corpus["alliance_note"])
+    note = store.get_note(corpus["conn"], corpus["alliance_note"], corpus["user_id"])
     matches = corpus["retriever"].assignments_for_note(note, top_k=3, apply_threshold=False)
 
     assert matches
@@ -35,7 +35,7 @@ def test_reverse_lookup_finds_the_right_assignment(corpus):
 
 
 def test_matches_carry_evidence(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"], corpus["user_id"])
     match = corpus["retriever"].notes_for_assignment(assignment, apply_threshold=False)[0]
 
     assert match.evidence.snippet
@@ -44,7 +44,7 @@ def test_matches_carry_evidence(corpus):
 
 
 def test_threshold_filters_weak_matches(corpus):
-    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"])
+    assignment = store.get_assignment(corpus["conn"], corpus["gradient_assignment"], corpus["user_id"])
     retriever = corpus["retriever"]
 
     unfiltered = retriever.notes_for_assignment(assignment, top_k=10, apply_threshold=False)

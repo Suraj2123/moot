@@ -51,27 +51,30 @@ class StudyLink:
             self.settings.voyage_api_key,
         )
         self.config = self.settings.retrieval
-        self.indexer = Indexer(self.conn, self.provider, self.config)
+        # Resolved here for now; commit 4 replaces this with an explicit
+        # UserContext supplied by the caller.
+        self.user_id = store.get_or_create_default_user(self.conn)
+        self.indexer = Indexer(self.conn, self.provider, self.config, self.user_id)
         self.retriever = self.indexer_retriever()
 
     def indexer_retriever(self):
         from .retrieval import Retriever
 
-        return Retriever(self.conn, self.provider, self.config)
+        return Retriever(self.conn, self.provider, self.config, self.user_id)
 
     # ------------------------------------------------------------------- config
 
     def set_retrieval_config(self, config: RetrievalConfig) -> None:
         """Swap retrieval settings at runtime (used by the UI sliders and the sweep)."""
         self.config = config
-        self.indexer = Indexer(self.conn, self.provider, config)
+        self.indexer = Indexer(self.conn, self.provider, config, self.user_id)
         self.retriever = self.indexer_retriever()
 
     # -------------------------------------------------------------------- canvas
 
     def sync_canvas(self) -> SyncResult:
         client = CanvasClient(self.settings.canvas_api_url, self.settings.canvas_api_token)
-        result = sync_all(self.conn, client)
+        result = sync_all(self.conn, client, self.user_id)
         self.indexer.embed_assignments()
         return result
 
@@ -85,28 +88,28 @@ class StudyLink:
         source_type: str = "note",
         reindex: bool = True,
     ) -> int:
-        note_id = store.create_note(self.conn, title, body, course_id, source_type)
+        note_id = store.create_note(self.conn, title, body, course_id, source_type, self.user_id)
         if reindex:
             self.reindex()
         return note_id
 
     def delete_note(self, note_id: int) -> None:
-        store.delete_note(self.conn, note_id)
+        store.delete_note(self.conn, note_id, self.user_id)
 
     def list_notes(self, course_id: Optional[int] = None, search: str = "") -> list[Note]:
-        return store.list_notes(self.conn, course_id=course_id, search=search)
+        return store.list_notes(self.conn, self.user_id, course_id=course_id, search=search)
 
     def list_courses(self):
-        return store.list_courses(self.conn)
+        return store.list_courses(self.conn, self.user_id)
 
     def list_assignments(self, course_id: Optional[int] = None) -> list[Assignment]:
-        return store.list_assignments(self.conn, course_id)
+        return store.list_assignments(self.conn, self.user_id, course_id)
 
     def get_assignment(self, assignment_id: int) -> Optional[Assignment]:
-        return store.get_assignment(self.conn, assignment_id)
+        return store.get_assignment(self.conn, assignment_id, self.user_id)
 
     def get_note(self, note_id: int) -> Optional[Note]:
-        return store.get_note(self.conn, note_id)
+        return store.get_note(self.conn, note_id, self.user_id)
 
     # ------------------------------------------------------------------ indexing
 
@@ -118,13 +121,13 @@ class StudyLink:
     def matches_for_assignment(
         self, assignment_id: int, top_k: Optional[int] = None
     ) -> list[NoteMatch]:
-        assignment = store.get_assignment(self.conn, assignment_id)
+        assignment = store.get_assignment(self.conn, assignment_id, self.user_id)
         if assignment is None:
             return []
         return self.retriever.notes_for_assignment(assignment, top_k=top_k)
 
     def assignments_for_note(self, note_id: int, top_k: int = 5) -> list[AssignmentMatch]:
-        note = store.get_note(self.conn, note_id)
+        note = store.get_note(self.conn, note_id, self.user_id)
         if note is None:
             return []
         return self.retriever.assignments_for_note(note, top_k=top_k)
@@ -141,7 +144,7 @@ class StudyLink:
 
     def load_eval_labels(self, path: Optional[Path] = None) -> int:
         pairs = load_labels(path or self.settings.labels_path)
-        return sync_to_db(self.conn, pairs)
+        return sync_to_db(self.conn, pairs, self.user_id)
 
     def evaluate(self, config: Optional[RetrievalConfig] = None) -> EvalReport:
         return evaluate_config(
@@ -149,10 +152,14 @@ class StudyLink:
             self.provider,
             config or self.config,
             self.settings.labels_path,
+            user_id=self.user_id,
         )
 
     def sweep(self, **kwargs) -> list[EvalReport]:
-        reports = sweep(self.conn, self.provider, self.settings.labels_path, base=self.config, **kwargs)
+        reports = sweep(
+            self.conn, self.provider, self.settings.labels_path,
+            base=self.config, user_id=self.user_id, **kwargs
+        )
         # The sweep leaves the index chunked under whichever config ran last;
         # restore the active configuration so the app is not left inconsistent.
         self.reindex()
@@ -168,7 +175,7 @@ class StudyLink:
         chunk_vectors = self.indexer.vectors.count("chunk", self.provider.name)
         assignment_vectors = self.indexer.vectors.count("assignment", self.provider.name)
 
-        params = store.chunking_params_in_use(self.conn)
+        params = store.chunking_params_in_use(self.conn, self.user_id)
         index_stale = (
             counts["chunks"] > chunk_vectors
             or counts["assignments"] > assignment_vectors

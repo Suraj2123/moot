@@ -102,10 +102,12 @@ class Retriever:
         conn: sqlite3.Connection,
         provider: EmbeddingProvider,
         config: RetrievalConfig,
+        user_id: int,
     ) -> None:
         self.conn = conn
         self.provider = provider
         self.config = config
+        self.user_id = user_id
         self.vectors = VectorStore(conn)
 
     # ------------------------------------------------------------------ helpers
@@ -120,7 +122,7 @@ class Retriever:
         if not hits:
             return []
 
-        chunk_to_note = store.chunk_note_map(self.conn)
+        chunk_to_note = store.chunk_note_map(self.conn, self.user_id)
         best: dict[int, tuple[int, float]] = {}
         for chunk_id, score in hits:
             note_id = chunk_to_note.get(chunk_id)
@@ -142,8 +144,10 @@ class Retriever:
         apply_threshold: bool,
     ) -> list[NoteMatch]:
         note_ids = [note_id for note_id, _, _ in ranked[: top_k * 2]]
-        notes = store.get_notes(self.conn, note_ids)
-        chunks = store.get_chunks(self.conn, [chunk_id for _, chunk_id, _ in ranked[: top_k * 2]])
+        notes = store.get_notes(self.conn, note_ids, self.user_id)
+        chunks = store.get_chunks(
+            self.conn, [chunk_id for _, chunk_id, _ in ranked[: top_k * 2]], self.user_id
+        )
 
         matches: list[NoteMatch] = []
         for note_id, chunk_id, score in ranked:
@@ -202,7 +206,7 @@ class Retriever:
         self, note: Note, top_k: int = 5, apply_threshold: bool = True
     ) -> list[AssignmentMatch]:
         """Reverse lookup: which assignments is this note relevant to?"""
-        chunks = store.list_chunks(self.conn, note_id=note.id)
+        chunks = store.list_chunks(self.conn, self.user_id, note_id=note.id)
         if not chunks:
             return []
 
@@ -232,7 +236,7 @@ class Retriever:
             score = float(best_scores[int(idx)])
             if apply_threshold and score < self.config.score_threshold:
                 continue
-            assignment = store.get_assignment(self.conn, assignment_ids[int(idx)])
+            assignment = store.get_assignment(self.conn, assignment_ids[int(idx)], self.user_id)
             if assignment is None:
                 continue
             chunk = kept_chunks[int(best_chunk_idx[int(idx)])]

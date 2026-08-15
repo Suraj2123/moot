@@ -48,10 +48,12 @@ class Indexer:
         conn: sqlite3.Connection,
         provider: EmbeddingProvider,
         config: RetrievalConfig,
+        user_id: int,
     ) -> None:
         self.conn = conn
         self.provider = provider
         self.config = config
+        self.user_id = user_id
         self.vectors = VectorStore(conn)
 
     # ------------------------------------------------------------------ chunking
@@ -72,7 +74,7 @@ class Indexer:
     def chunk_notes(self, force: bool = False) -> tuple[int, int]:
         notes_chunked = 0
         chunks_written = 0
-        for note in store.list_notes(self.conn):
+        for note in store.list_notes(self.conn, self.user_id):
             if not force and not self._needs_rechunk(note.id):
                 continue
             texts = chunk_text(
@@ -109,11 +111,11 @@ class Indexer:
         return len(ids)
 
     def embed_chunks(self) -> int:
-        chunks = store.list_chunks(self.conn)
+        chunks = store.list_chunks(self.conn, self.user_id)
         return self._embed_missing("chunk", [(c.id, c.text) for c in chunks])
 
     def embed_assignments(self) -> int:
-        assignments = store.list_assignments(self.conn)
+        assignments = store.list_assignments(self.conn, self.user_id)
         return self._embed_missing(
             "assignment", [(a.id, a.retrieval_text) for a in assignments]
         )
@@ -125,8 +127,8 @@ class Indexer:
         notes_chunked, chunks_written = self.chunk_notes(force=force)
         if force:
             # Drop existing vectors under this model so they are recomputed.
-            chunk_ids = [c.id for c in store.list_chunks(self.conn)]
-            assignment_ids = [a.id for a in store.list_assignments(self.conn)]
+            chunk_ids = [c.id for c in store.list_chunks(self.conn, self.user_id)]
+            assignment_ids = [a.id for a in store.list_assignments(self.conn, self.user_id)]
             self.vectors.delete("chunk", chunk_ids, self.provider.name)
             self.vectors.delete("assignment", assignment_ids, self.provider.name)
 

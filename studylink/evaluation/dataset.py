@@ -59,7 +59,7 @@ def load_labels(path: Path) -> list[LabeledPair]:
 
 
 def resolve_labels(
-    conn: sqlite3.Connection, pairs: list[LabeledPair]
+    conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int
 ) -> tuple[dict[int, set[int]], dict[int, set[int]], list[str]]:
     """Map title-keyed labels onto database ids.
 
@@ -68,8 +68,8 @@ def resolve_labels(
     dropped silently: a typo in a label file that quietly shrinks the eval set is
     how you end up trusting a metric computed over three pairs.
     """
-    assignments = {a.name.strip().lower(): a.id for a in store.list_assignments(conn)}
-    notes = {n.title.strip().lower(): n.id for n in store.list_notes(conn)}
+    assignments = {a.name.strip().lower(): a.id for a in store.list_assignments(conn, user_id)}
+    notes = {n.title.strip().lower(): n.id for n in store.list_notes(conn, user_id)}
 
     positives: dict[int, set[int]] = {}
     negatives: dict[int, set[int]] = {}
@@ -88,9 +88,9 @@ def resolve_labels(
     return positives, negatives, unresolved
 
 
-def sync_to_db(conn: sqlite3.Connection, pairs: list[LabeledPair]) -> int:
+def sync_to_db(conn: sqlite3.Connection, pairs: list[LabeledPair], user_id: int) -> int:
     """Mirror file labels into SQLite so the UI can show and edit them."""
-    positives, negatives, _ = resolve_labels(conn, pairs)
+    positives, negatives, _ = resolve_labels(conn, pairs, user_id)
     written = 0
     for assignment_id, note_ids in positives.items():
         for note_id in note_ids:
