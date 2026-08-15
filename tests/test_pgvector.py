@@ -385,17 +385,68 @@ def test_index_helpers_are_no_ops_on_sqlite(conn):
     apply_search_tuning(conn)  # must not raise
 
 
+@pytest.fixture
+def hnsw_conn(pg_conn, monkeypatch):
+    """A connection with the opt-in index actually built.
+
+    The index is off by default because it costs recall on a multi-tenant table
+    (see `hnsw_enabled`), but the machinery still has to be correct for anyone who
+    turns it on -- so the tests below build it explicitly.
+    """
+    from studylink.pgvector_support import ensure_hnsw_index
+
+    monkeypatch.setenv("STUDYLINK_HNSW", "1")
+    assert ensure_hnsw_index(pg_conn) is True
+    yield pg_conn
+    # `reset` truncates rows but leaves schema objects, and the test database is
+    # shared across the module -- without this the index outlives the test that
+    # asked for it and the default-off assertions start failing.
+    pg_conn.execute(text(f"DROP INDEX IF EXISTS {HNSW_INDEX_NAME}"))
+    pg_conn.commit()
+
+
 @requires_postgres
-def test_hnsw_index_exists_and_is_idempotent(pg_conn):
+def test_hnsw_index_is_off_by_default(pg_conn):
+    """Default-on would silently cost recall as soon as a corpus grows."""
+    from studylink.pgvector_support import ensure_hnsw_index, has_hnsw_index, hnsw_enabled
+
+    assert hnsw_enabled() is False
+    assert ensure_hnsw_index(pg_conn) is False
+    assert has_hnsw_index(pg_conn) is False
+
+
+@requires_postgres
+def test_hnsw_index_can_be_enabled_and_is_idempotent(hnsw_conn):
     from studylink.pgvector_support import ensure_hnsw_index, has_hnsw_index
 
-    assert has_hnsw_index(pg_conn) is True  # connect() created it
-    assert ensure_hnsw_index(pg_conn) is True  # second call changes nothing
-    assert has_hnsw_index(pg_conn) is True
+    assert has_hnsw_index(hnsw_conn) is True
+    assert ensure_hnsw_index(hnsw_conn) is True  # second call changes nothing
+    assert has_hnsw_index(hnsw_conn) is True
 
 
 @requires_postgres
-def test_hnsw_index_uses_the_cosine_operator_class(pg_conn):
+def test_search_is_exact_without_the_index(pg_corpus, provider):
+    """The reason the index is off: no index means no approximation.
+
+    Weak as an assertion on a small corpus, but it is the property the default
+    exists to preserve, and it fails loudly if search ever starts approximating
+    without anyone opting in.
+    """
+    from studylink.pgvector_support import has_hnsw_index
+    from studylink.vectorstore import VectorStore
+
+    assert has_hnsw_index(pg_corpus["conn"]) is False
+
+    store_ = VectorStore(pg_corpus["conn"])
+    query = _query_vector(pg_corpus, provider)
+    native = store_.search(query, "chunk", provider.name, pg_corpus["user_id"], top_k=10)
+    exact = store_._search_numpy(query, "chunk", provider.name, pg_corpus["user_id"], 10, ())
+
+    assert [oid for oid, _ in native] == [oid for oid, _ in exact]
+
+
+@requires_postgres
+def test_hnsw_index_uses_the_cosine_operator_class(hnsw_conn):
     """The opclass has to match the operator the search uses.
 
     Build the index with `vector_l2_ops` and query with `<=>` and Postgres simply
@@ -403,7 +454,7 @@ def test_hnsw_index_uses_the_cosine_operator_class(pg_conn):
     is a performance regression with no failing test and no error message
     anywhere, so it gets one here.
     """
-    opclass = pg_conn.execute(
+    opclass = hnsw_conn.execute(
         text(
             "SELECT o.opcname FROM pg_index i "
             "JOIN pg_class c ON c.oid = i.indexrelid "
@@ -416,7 +467,7 @@ def test_hnsw_index_uses_the_cosine_operator_class(pg_conn):
 
 
 @requires_postgres
-def test_planner_can_reach_the_hnsw_index(pg_conn, provider, config):
+def test_planner_can_reach_the_hnsw_index(hnsw_conn, provider, config):
     """A nearest-neighbour query on the bare table must be able to use the index.
 
     Deliberately not asserted against the query `_search_native` builds: that one
@@ -424,20 +475,20 @@ def test_planner_can_reach_the_hnsw_index(pg_conn, provider, config):
     index underneath the join. This asserts the index itself is well-formed and
     reachable, which is the part that would otherwise break silently.
     """
-    user_id = store.get_or_create_default_user(pg_conn)
+    user_id = store.get_or_create_default_user(hnsw_conn)
     for i in range(20):
-        store.create_note(pg_conn, f"Note {i}", f"Topic number {i} about learning.", user_id=user_id)
-    Indexer(pg_conn, provider, config, user_id).reindex()
-    pg_conn.execute(text("ANALYZE embeddings"))
+        store.create_note(hnsw_conn, f"Note {i}", f"Topic number {i} about learning.", user_id=user_id)
+    Indexer(hnsw_conn, provider, config, user_id).reindex()
+    hnsw_conn.execute(text("ANALYZE embeddings"))
 
     query = to_pgvector_literal(provider.embed(["learning"])[0])
     # The table is tiny, so a sequential scan genuinely is cheaper; disable it to
     # ask the narrower question of whether the index *can* serve this query.
-    pg_conn.execute(text("SET enable_seqscan = off"))
+    hnsw_conn.execute(text("SET enable_seqscan = off"))
     try:
         plan = "\n".join(
             row[0]
-            for row in pg_conn.execute(
+            for row in hnsw_conn.execute(
                 text(
                     "EXPLAIN SELECT owner_id FROM embeddings "
                     "ORDER BY embedding <=> :q LIMIT 5"
@@ -446,7 +497,7 @@ def test_planner_can_reach_the_hnsw_index(pg_conn, provider, config):
             )
         )
     finally:
-        pg_conn.execute(text("SET enable_seqscan = on"))
+        hnsw_conn.execute(text("SET enable_seqscan = on"))
 
     assert HNSW_INDEX_NAME in plan, plan
 

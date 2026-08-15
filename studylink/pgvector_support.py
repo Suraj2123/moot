@@ -29,9 +29,9 @@ HNSW_INDEX_NAME = "ix_embeddings_embedding_hnsw"
 # corpus can end up with fewer than top_k survivors -- a silent recall loss that
 # reads as "the search did not find much" rather than as an error.
 #
-# Measured on 20k vectors across 20 users: recall@5 is 1.0 at this setting. It is
-# not currently the binding constraint, though -- see `ensure_hnsw_index` for why
-# the planner does not reach the index on the query the app actually issues.
+# Only relevant when STUDYLINK_HNSW built an index; see `hnsw_enabled` for the
+# measurements behind that default being off. Reaching full recall on 20 tenants
+# needed 800 here, which was already slower than not using the index at all.
 DEFAULT_EF_SEARCH = 100
 
 
@@ -55,27 +55,39 @@ def has_hnsw_index(conn: Connection) -> bool:
     return row is not None
 
 
-def ensure_hnsw_index(conn: Connection) -> bool:
-    """Create the HNSW index if it is missing. Alembic owns this in deployments.
+def hnsw_enabled() -> bool:
+    """Whether to build the HNSW index. Off by default, and deliberately so.
 
-    A caveat worth stating plainly, because the index looks like it is doing more
-    than it is: Postgres does not use it for the query `VectorStore._search_native`
-    issues today. That query joins `embeddings` to the owner table to scope
-    results to one user, and the planner will not drive an HNSW index-ordered scan
-    underneath that join -- it falls back to a top-N sort over the filtered rows.
+    Measured on 20k vectors across 20 users, top_k=5 (bench_vectors.py --ef-sweep):
 
-    Measured on 20k vectors spread over 20 users, 30 random queries, top_k=5:
+              ef_search   ms/query   recall@5
+                    100       3.20      0.560
+                    400       7.05      0.933
+                   1000      13.65      1.000
+         index bypassed       8.74      1.000
 
-        join to owner table (index unused)   24.9 ms/query   recall@5 1.00
-        single table, tenant column present   5.4 ms/query   recall@5 1.00
-        single table, index disabled          5.9 ms/query   recall@5 1.00
+    The index is strictly dominated here -- every setting that approaches full
+    recall is slower than not using it, and the default setting loses 44% of true
+    neighbours. `embeddings` is multi-tenant and HNSW cannot apply the tenant
+    predicate during its graph walk, so it gathers candidates across everyone's
+    vectors and the predicate discards them afterwards, leaving one tenant
+    roughly ef_search/N. ef_search is capped at 1000, so past some number of
+    tenants full recall is not reachable at all.
 
-    Two things follow. The join costs about 20ms, and HNSW itself saves about
-    0.5ms -- at one semester of notes per user the index is close to irrelevant,
-    and it is the join that is worth removing. The index is created anyway
-    because it costs little, it is correct, and it is what starts paying once a
-    single user's corpus outgrows an exact scan.
+    Without the index Postgres does an exact top-N over one user's rows, which is
+    both correct and, at a semester of notes per user, fast.
+
+    Set STUDYLINK_HNSW=1 to build it anyway and measure for yourself. Revisit the
+    default on pgvector >= 0.8, whose iterative index scans keep searching until
+    enough rows survive the filter -- the missing piece here.
     """
+    return os.environ.get("STUDYLINK_HNSW", "").strip().lower() in {"1", "true", "yes"}
+
+
+def ensure_hnsw_index(conn: Connection) -> bool:
+    """Create the HNSW index if it is missing and STUDYLINK_HNSW asks for it."""
+    if not hnsw_enabled():
+        return False
     if not has_vector_column(conn):
         return False
     if not has_hnsw_index(conn):
@@ -94,10 +106,9 @@ def apply_search_tuning(conn: Connection, ef_search: int | None = None) -> None:
     """Set `hnsw.ef_search` for this connection.
 
     It is a per-session GUC, not a property of the index, so it has to be set on
-    every connection rather than once at migration time. Setting it below the
-    query's LIMIT makes HNSW unable to return that many rows however good the
-    index is, so it is floored at a value that leaves room for the owner-table
-    join to discard other users' candidates.
+    every connection rather than once at migration time. Harmless when no index
+    exists, which is the default -- it only takes effect if STUDYLINK_HNSW built
+    one, and then it is the dial that trades latency for recall.
     """
     if not is_postgres(conn):
         return
