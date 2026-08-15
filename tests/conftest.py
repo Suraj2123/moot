@@ -34,9 +34,77 @@ def config():
 
 
 @pytest.fixture
-def corpus(conn, provider, config):
+def user_id(conn):
+    """The single local user. Most tests only need one owner."""
+    return store.get_or_create_default_user(conn)
+
+
+@pytest.fixture
+def two_users(conn, provider, config):
+    """Alice and Bob, each with a course, an assignment, and a note.
+
+    Their content is deliberately on the *same topic*: if scoping is broken,
+    retrieval will happily rank the other user's note first, and the assertions
+    below will catch it. Two users with unrelated corpora would pass by luck.
+    """
+    alice = store.create_user(conn, email="alice@example.edu")
+    bob = store.create_user(conn, email="bob@example.edu")
+
+    alice_course = store.upsert_course(conn, "101", "CS 101", "CS101", user_id=alice)
+    bob_course = store.upsert_course(conn, "101", "CS 101", "CS101", user_id=bob)
+
+    alice_assignment = store.upsert_assignment(
+        conn,
+        course_id=alice_course,
+        canvas_id="900",
+        name="Problem Set: Gradient Descent",
+        description="Implement gradient descent and compare learning rates.",
+        user_id=alice,
+    )
+    bob_assignment = store.upsert_assignment(
+        conn,
+        course_id=bob_course,
+        canvas_id="900",
+        name="Problem Set: Gradient Descent",
+        description="Implement gradient descent and compare learning rates.",
+        user_id=bob,
+    )
+
+    alice_note = store.create_note(
+        conn,
+        "Alice's gradient descent notes",
+        "Gradient descent steps downhill. The learning rate alpha controls step size; "
+        "too large and the loss diverges. ALICE-SECRET-TOKEN",
+        course_id=alice_course,
+        user_id=alice,
+    )
+    bob_note = store.create_note(
+        conn,
+        "Bob's gradient descent notes",
+        "Gradient descent steps downhill. The learning rate alpha controls step size; "
+        "too large and the loss diverges. BOB-SECRET-TOKEN",
+        course_id=bob_course,
+        user_id=bob,
+    )
+
+    Indexer(conn, provider, config, alice).reindex()
+    Indexer(conn, provider, config, bob).reindex()
+
+    return {
+        "alice": alice,
+        "bob": bob,
+        "alice_course": alice_course,
+        "bob_course": bob_course,
+        "alice_assignment": alice_assignment,
+        "bob_assignment": bob_assignment,
+        "alice_note": alice_note,
+        "bob_note": bob_note,
+    }
+
+
+@pytest.fixture
+def corpus(conn, provider, config, user_id):
     """A tiny two-course corpus with one obvious match per assignment."""
-    user_id = store.get_or_create_default_user(conn)
     cs = store.upsert_course(conn, "1", "CS 101: Machine Learning", "CS101", user_id=user_id)
     hist = store.upsert_course(conn, "2", "HIST 200: European History", "HIST200", user_id=user_id)
 

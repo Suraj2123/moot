@@ -93,9 +93,8 @@ def test_confidence_is_bounded_and_monotonic():
     assert 0.0 <= low <= mid <= high <= 1.0
 
 
-def test_vector_store_roundtrip_and_dimension_guard(conn):
+def test_vector_store_roundtrip_and_dimension_guard(conn, user_id):
     provider = build_provider("hash", "hash-64")
-    user_id = store.get_or_create_default_user(conn)
     note_id = store.create_note(conn, "n", "body", user_id=user_id)
     chunk_ids = store.replace_chunks(conn, note_id, ["alpha beta", "gamma delta"], 60, 10)
 
@@ -113,9 +112,8 @@ def test_vector_store_roundtrip_and_dimension_guard(conn):
     assert hits[0][1] > hits[1][1]
 
 
-def test_vector_store_rejects_dimension_mismatch(conn):
+def test_vector_store_rejects_dimension_mismatch(conn, user_id):
     small = build_provider("hash", "hash-64")
-    user_id = store.get_or_create_default_user(conn)
     note_id = store.create_note(conn, "n", "body", user_id=user_id)
     chunk_ids = store.replace_chunks(conn, note_id, ["alpha"], 60, 10)
 
