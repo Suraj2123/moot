@@ -40,14 +40,20 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS courses (
     id          INTEGER PRIMARY KEY,
-    canvas_id   TEXT UNIQUE,
+    user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    canvas_id   TEXT,
     name        TEXT NOT NULL,
     course_code TEXT,
-    synced_at   TEXT
+    synced_at   TEXT,
+    -- Uniqueness is per user: two students can both be enrolled in Canvas
+    -- course 101, and those are different rows.
+    UNIQUE (user_id, canvas_id)
 );
+CREATE INDEX IF NOT EXISTS idx_courses_user ON courses(user_id);
 
 CREATE TABLE IF NOT EXISTS assignments (
     id               INTEGER PRIMARY KEY,
+    user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
     canvas_id        TEXT,
     course_id        INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
     name             TEXT NOT NULL,
@@ -59,9 +65,11 @@ CREATE TABLE IF NOT EXISTS assignments (
     synced_at        TEXT,
     UNIQUE (course_id, canvas_id)
 );
+CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments(user_id);
 
 CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY,
+    user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
     course_id   INTEGER REFERENCES courses(id) ON DELETE SET NULL,
     title       TEXT NOT NULL,
     body        TEXT NOT NULL,
@@ -69,9 +77,14 @@ CREATE TABLE IF NOT EXISTS notes (
     source_type TEXT NOT NULL DEFAULT 'note',
     created_at  TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id         INTEGER PRIMARY KEY,
+    -- Denormalised from notes. Retrieval filters millions of chunk vectors by
+    -- owner on every query; a join to notes for that is a per-query cost paid
+    -- to avoid a column that never changes independently.
+    user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
     note_id    INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     ordinal    INTEGER NOT NULL,
     text       TEXT NOT NULL,
@@ -81,6 +94,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_overlap INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_note ON chunks(note_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_user ON chunks(user_id);
 
 CREATE TABLE IF NOT EXISTS embeddings (
     owner_type TEXT NOT NULL,          -- 'chunk' | 'assignment'

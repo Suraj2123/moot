@@ -18,23 +18,70 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# --------------------------------------------------------------------------- users
+
+# Until accounts exist (day 3) every row belongs to one local user. Writing a
+# real user_id from the start -- rather than leaving it null and backfilling --
+# matters because SQLite treats NULLs as distinct in a UNIQUE index, so a null
+# user_id would silently break upsert idempotency on re-sync.
+DEFAULT_USER_EMAIL = "local@studylink"
+
+
+def get_or_create_default_user(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT id FROM users WHERE email = ?", (DEFAULT_USER_EMAIL,)
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    with transaction(conn):
+        cursor = conn.execute(
+            "INSERT INTO users (email, display_name, created_at) VALUES (?, ?, ?)",
+            (DEFAULT_USER_EMAIL, "Local user", _now()),
+        )
+    return int(cursor.lastrowid)
+
+
+def create_user(
+    conn: sqlite3.Connection,
+    apple_sub: str | None = None,
+    email: str | None = None,
+    display_name: str | None = None,
+) -> int:
+    with transaction(conn):
+        cursor = conn.execute(
+            "INSERT INTO users (apple_sub, email, display_name, created_at) VALUES (?, ?, ?, ?)",
+            (apple_sub, email, display_name, _now()),
+        )
+    return int(cursor.lastrowid)
+
+
 # --------------------------------------------------------------------------- courses
 
 
-def upsert_course(conn: sqlite3.Connection, canvas_id: str, name: str, course_code: str = "") -> int:
+def upsert_course(
+    conn: sqlite3.Connection,
+    canvas_id: str,
+    name: str,
+    course_code: str = "",
+    user_id: Optional[int] = None,
+) -> int:
+    user_id = user_id or get_or_create_default_user(conn)
     with transaction(conn):
         conn.execute(
             """
-            INSERT INTO courses (canvas_id, name, course_code, synced_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(canvas_id)
+            INSERT INTO courses (user_id, canvas_id, name, course_code, synced_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, canvas_id)
             DO UPDATE SET name = excluded.name,
                           course_code = excluded.course_code,
                           synced_at = excluded.synced_at
             """,
-            (str(canvas_id), name, course_code, _now()),
+            (user_id, str(canvas_id), name, course_code, _now()),
         )
-    row = conn.execute("SELECT id FROM courses WHERE canvas_id = ?", (str(canvas_id),)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM courses WHERE user_id = ? AND canvas_id = ?",
+        (user_id, str(canvas_id)),
+    ).fetchone()
     return int(row["id"])
 
 
@@ -78,14 +125,16 @@ def upsert_assignment(
     points_possible: Optional[float] = None,
     submission_types: str = "",
     html_url: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> int:
+    user_id = user_id or get_or_create_default_user(conn)
     with transaction(conn):
         conn.execute(
             """
             INSERT INTO assignments
-                (canvas_id, course_id, name, description, due_at, points_possible,
+                (user_id, canvas_id, course_id, name, description, due_at, points_possible,
                  submission_types, html_url, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(course_id, canvas_id)
             DO UPDATE SET name = excluded.name,
                           description = excluded.description,
@@ -96,6 +145,7 @@ def upsert_assignment(
                           synced_at = excluded.synced_at
             """,
             (
+                user_id,
                 str(canvas_id),
                 course_id,
                 name,
@@ -180,13 +230,18 @@ def create_note(
     body: str,
     course_id: Optional[int] = None,
     source_type: str = "note",
+    user_id: Optional[int] = None,
 ) -> int:
     if source_type not in ("note", "transcript"):
         raise ValueError("source_type must be 'note' or 'transcript'")
+    user_id = user_id or get_or_create_default_user(conn)
     with transaction(conn):
         cursor = conn.execute(
-            "INSERT INTO notes (course_id, title, body, source_type, created_at) VALUES (?, ?, ?, ?, ?)",
-            (course_id, title.strip() or "Untitled note", body, source_type, _now()),
+            """
+            INSERT INTO notes (user_id, course_id, title, body, source_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, course_id, title.strip() or "Untitled note", body, source_type, _now()),
         )
     return int(cursor.lastrowid)
 
@@ -270,14 +325,16 @@ def replace_chunks(
                 old_ids,
             )
             conn.execute("DELETE FROM chunks WHERE note_id = ?", (note_id,))
+        owner = conn.execute("SELECT user_id FROM notes WHERE id = ?", (note_id,)).fetchone()
+        owner_id = owner["user_id"] if owner else None
         new_ids = []
         for ordinal, text in enumerate(texts):
             cursor = conn.execute(
                 """
-                INSERT INTO chunks (note_id, ordinal, text, chunk_size, chunk_overlap)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO chunks (user_id, note_id, ordinal, text, chunk_size, chunk_overlap)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (note_id, ordinal, text, chunk_size, chunk_overlap),
+                (owner_id, note_id, ordinal, text, chunk_size, chunk_overlap),
             )
             new_ids.append(int(cursor.lastrowid))
     return new_ids
