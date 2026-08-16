@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import Connection, func, select
 
 from . import schema, store
 from .agent import WorkSessionAgent
@@ -50,10 +50,17 @@ class StudyLink:
         self,
         settings: Optional[Settings] = None,
         user: Optional[UserContext] = None,
+        conn: Optional[Connection] = None,
     ) -> None:
         self.settings = settings or load_settings()
+        # An explicit connection is how the API scopes a service object to a
+        # single request. Without it, `user` would be mutable state on an object
+        # shared across concurrent requests, and two callers would race over
+        # whose identity is set -- which is an authorisation bug, not a
+        # performance one. The CLI and the tests pass nothing and get their own.
+        #
         # sqlalchemy_url honours DATABASE_URL and falls back to SQLite at db_path.
-        self.conn = connect(self.settings.sqlalchemy_url)
+        self.conn = conn if conn is not None else connect(self.settings.sqlalchemy_url)
         self.provider = build_provider(
             self.settings.embedding_provider,
             self.settings.embedding_model,

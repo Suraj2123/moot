@@ -13,35 +13,87 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
 
+from . import auth as auth_module
 from .agent import AgentUnavailable, citation_coverage
 from .canvas import CanvasError
 from .context import UserContext
 from .errors import CrossUserAccessError, NotFoundError
+from .config import load_settings
+from .db import create_all, make_engine
+from .pgvector_support import apply_search_tuning
 from .service import StudyLink
 
 api = FastAPI(title="StudyLink", version="0.1.0")
-_app: Optional[StudyLink] = None
+
+# The engine is process-wide and its pool is shared; connections are not. Each
+# request checks one out and returns it, which is what lets `app.user` be a
+# per-request fact instead of mutable state on a shared object that two
+# concurrent callers would race over. That race would be an authorisation bug,
+# not a performance one.
+_engine = None
 
 
-def get_app() -> StudyLink:
-    """The service for the current caller.
+def engine():
+    global _engine
+    if _engine is None:
+        settings = load_settings()
+        _engine = make_engine(settings.sqlalchemy_url)
+        create_all(_engine)
+    return _engine
 
-    Day 3 replaces this with a FastAPI dependency that builds a UserContext from
-    the request's bearer token. Until then every request is the local user, and
-    that assumption lives in exactly one place.
+
+def db_connection():
+    conn = engine().connect()
+    apply_search_tuning(conn)  # per-session GUC; no-op off Postgres
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def current_user(
+    authorization: Optional[str] = Header(default=None),
+    conn=Depends(db_connection),
+) -> UserContext:
+    """Resolve the bearer token into an identity, or refuse the request.
+
+    The single gate. No anonymous fallback and no default user: an endpoint that
+    depends on this either has a real authenticated caller or never runs.
+
+    A dependency rather than a helper the endpoint calls, because forgetting a
+    dependency changes the signature where a reviewer sees it, while forgetting
+    a call inside a body is invisible.
     """
-    global _app
-    if _app is None:
-        app = StudyLink()
-        app.user = UserContext.local(app.conn)
-        _app = app
-    return _app
+    token = auth_module.bearer_token(authorization)
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    context = auth_module.context_for_token(conn, token)
+    if context is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return context
+
+
+def current_app(
+    user: UserContext = Depends(current_user),
+    conn=Depends(db_connection),
+) -> StudyLink:
+    """A service object scoped to this request and this caller."""
+    return StudyLink(user=user, conn=conn)
 
 
 class NoteIn(BaseModel):
@@ -51,10 +103,96 @@ class NoteIn(BaseModel):
     source_type: str = Field(default="note", pattern="^(note|transcript)$")
 
 
+class SignupIn(BaseModel):
+    email: str
+    password: str
+    display_name: Optional[str] = None
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
 class WorkSessionIn(BaseModel):
     assignment_id: int
     mode: str = Field(default="outline", pattern="^(outline|draft|summary)$")
     top_k: Optional[int] = None
+
+
+@api.post("/auth/signup", status_code=201)
+def signup(
+    payload: SignupIn,
+    request: Request,
+    conn=Depends(db_connection),
+) -> dict:
+    try:
+        result = auth_module.signup(
+            conn,
+            payload.email,
+            payload.password,
+            display_name=payload.display_name,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except auth_module.SignupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "token": result.token,
+        "user": {"id": result.user.user_id, "email": result.user.email},
+    }
+
+
+@api.post("/auth/login")
+def login(
+    payload: LoginIn,
+    request: Request,
+    conn=Depends(db_connection),
+) -> dict:
+    try:
+        result = auth_module.login(
+            conn,
+            payload.email,
+            payload.password,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except auth_module.AuthError as exc:
+        # One status and one message for every kind of failure -- see auth.py.
+        raise HTTPException(
+            status_code=401,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    return {
+        "token": result.token,
+        "user": {"id": result.user.user_id, "email": result.user.email},
+    }
+
+
+@api.post("/auth/logout")
+def logout(
+    authorization: Optional[str] = Header(default=None),
+    conn=Depends(db_connection),
+) -> dict:
+    """Ends the current session.
+
+    Always 200, even for a token that was already dead. "Log me out" has
+    succeeded either way, and reporting the difference would tell an unauthorised
+    caller whether the token they hold is live.
+    """
+    token = auth_module.bearer_token(authorization)
+    ended = auth_module.logout(conn, token) if token else False
+    return {"ok": True, "ended": ended}
+
+
+@api.get("/auth/me")
+def me(user: UserContext = Depends(current_user)) -> dict:
+    return {
+        "id": user.user_id,
+        "email": user.email,
+        "auth_source": user.auth_source,
+    }
 
 
 @api.exception_handler(CrossUserAccessError)
@@ -78,8 +216,8 @@ def _not_found(request, exc: NotFoundError):
 
 
 @api.get("/health")
-def health() -> dict:
-    status = get_app().status()
+def health(app: StudyLink = Depends(current_app)) -> dict:
+    status = app.status()
     return {
         "ok": True,
         "provider": status.provider,
@@ -91,15 +229,17 @@ def health() -> dict:
 
 
 @api.get("/courses")
-def list_courses() -> list[dict]:
+def list_courses(app: StudyLink = Depends(current_app)) -> list[dict]:
     return [
         {"id": c.id, "name": c.name, "course_code": c.course_code}
-        for c in get_app().list_courses()
+        for c in app.list_courses()
     ]
 
 
 @api.get("/assignments")
-def list_assignments(course_id: Optional[int] = None) -> list[dict]:
+def list_assignments(
+    course_id: Optional[int] = None, app: StudyLink = Depends(current_app)
+) -> list[dict]:
     return [
         {
             "id": a.id,
@@ -108,13 +248,16 @@ def list_assignments(course_id: Optional[int] = None) -> list[dict]:
             "due_at": a.due_at,
             "points_possible": a.points_possible,
         }
-        for a in get_app().list_assignments(course_id)
+        for a in app.list_assignments(course_id)
     ]
 
 
 @api.get("/assignments/{assignment_id}/matches")
-def assignment_matches(assignment_id: int, top_k: Optional[int] = None) -> dict:
-    app = get_app()
+def assignment_matches(
+    assignment_id: int,
+    top_k: Optional[int] = None,
+    app: StudyLink = Depends(current_app),
+) -> dict:
     matches = app.matches_for_assignment(assignment_id, top_k=top_k)
     assignment = app.get_assignment(assignment_id)
     return {
@@ -124,7 +267,11 @@ def assignment_matches(assignment_id: int, top_k: Optional[int] = None) -> dict:
 
 
 @api.get("/notes")
-def list_notes(course_id: Optional[int] = None, search: str = "") -> list[dict]:
+def list_notes(
+    course_id: Optional[int] = None,
+    search: str = "",
+    app: StudyLink = Depends(current_app),
+) -> list[dict]:
     return [
         {
             "id": n.id,
@@ -133,21 +280,22 @@ def list_notes(course_id: Optional[int] = None, search: str = "") -> list[dict]:
             "source_type": n.source_type,
             "chars": len(n.body),
         }
-        for n in get_app().list_notes(course_id=course_id, search=search)
+        for n in app.list_notes(course_id=course_id, search=search)
     ]
 
 
 @api.post("/notes", status_code=201)
-def create_note(payload: NoteIn) -> dict:
-    note_id = get_app().add_note(
+def create_note(payload: NoteIn, app: StudyLink = Depends(current_app)) -> dict:
+    note_id = app.add_note(
         payload.title, payload.body, payload.course_id, payload.source_type
     )
     return {"id": note_id}
 
 
 @api.get("/notes/{note_id}/assignments")
-def reverse_lookup(note_id: int, top_k: int = 5) -> list[dict]:
-    app = get_app()
+def reverse_lookup(
+    note_id: int, top_k: int = 5, app: StudyLink = Depends(current_app)
+) -> list[dict]:
     return [
         {
             "assignment_id": m.assignment.id,
@@ -162,22 +310,26 @@ def reverse_lookup(note_id: int, top_k: int = 5) -> list[dict]:
 
 
 @api.get("/search")
-def search(q: str, top_k: int = 5) -> list[dict]:
-    return [m.as_dict() for m in get_app().search_notes(q, top_k=top_k)]
+def search(
+    q: str, top_k: int = 5, app: StudyLink = Depends(current_app)
+) -> list[dict]:
+    return [m.as_dict() for m in app.search_notes(q, top_k=top_k)]
 
 
 @api.post("/sync")
-def sync() -> dict:
+def sync(app: StudyLink = Depends(current_app)) -> dict:
     try:
-        result = get_app().sync_canvas()
+        result = app.sync_canvas()
     except CanvasError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"courses": result.courses, "assignments": result.assignments, "errors": result.errors}
 
 
 @api.post("/reindex")
-def reindex(force: bool = False) -> dict:
-    stats = get_app().reindex(force=force)
+def reindex(
+    force: bool = False, app: StudyLink = Depends(current_app)
+) -> dict:
+    stats = app.reindex(force=force)
     return {
         "notes_chunked": stats.notes_chunked,
         "chunks_written": stats.chunks_written,
@@ -187,8 +339,9 @@ def reindex(force: bool = False) -> dict:
 
 
 @api.post("/work-session")
-def work_session(payload: WorkSessionIn) -> dict:
-    app = get_app()
+def work_session(
+    payload: WorkSessionIn, app: StudyLink = Depends(current_app)
+) -> dict:
     assignment = app.get_assignment(payload.assignment_id)
     if assignment is None:
         raise HTTPException(status_code=404, detail="assignment not found")
@@ -213,5 +366,5 @@ def work_session(payload: WorkSessionIn) -> dict:
 
 
 @api.get("/evaluation")
-def evaluation() -> dict:
-    return get_app().evaluate().as_dict()
+def evaluation(app: StudyLink = Depends(current_app)) -> dict:
+    return app.evaluate().as_dict()
