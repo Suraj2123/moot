@@ -72,6 +72,35 @@ users = Table(
 Index("uq_users_email_lower", func.lower(users.c.email), unique=True)
 
 
+# What the browser holds is a random token; what this table holds is its SHA-256.
+# A leaked database backup therefore does not hand the reader working sessions,
+# for the same reason password_hash is not a password. The token is high-entropy
+# and random, so a plain hash is right here -- there is nothing to brute-force
+# and no need for a slow KDF on every authenticated request.
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    # Absolute expiry, checked on every request. Not a sliding window: a session
+    # that renews itself on use never ends for an attacker who keeps using it.
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    # Set when the session is deliberately ended. Kept as a row rather than
+    # deleted so "this token was revoked" and "this token never existed" stay
+    # distinguishable in the logs.
+    Column("revoked_at", DateTime(timezone=True)),
+    Column("user_agent", String(255)),
+)
+
+
 courses = Table(
     "courses",
     metadata,
