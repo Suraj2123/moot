@@ -88,22 +88,78 @@ def get_or_create_default_user(conn: Connection) -> int:
     return int(result.inserted_primary_key[0])
 
 
+def normalise_email(email: str) -> str:
+    """The one place an address is turned into its canonical form.
+
+    Lowercased and stripped. Everything that looks up or stores an address goes
+    through here, so "the address in the database" and "the address the user
+    typed" cannot drift apart -- and the unique index on lower(email) enforces
+    the same rule at the storage layer for anything that forgets.
+    """
+    return (email or "").strip().lower()
+
+
 def create_user(
     conn: Connection,
     apple_sub: Optional[str] = None,
     email: Optional[str] = None,
     display_name: Optional[str] = None,
+    password_hash: Optional[str] = None,
 ) -> int:
     with transaction(conn):
         result = conn.execute(
             insert(users).values(
                 apple_sub=apple_sub,
-                email=email,
+                email=normalise_email(email) if email else None,
                 display_name=display_name,
+                password_hash=password_hash,
                 created_at=_now(),
             )
         )
     return int(result.inserted_primary_key[0])
+
+
+def get_user_by_email(conn: Connection, email: str) -> Optional[dict]:
+    """Look an account up by address, case-insensitively.
+
+    Matches on lower(email) rather than on the raw column so the query uses the
+    same rule as the unique index -- and so an address stored before
+    normalisation existed is still found.
+    """
+    normalised = normalise_email(email)
+    if not normalised:
+        return None
+    row = conn.execute(
+        select(
+            users.c.id,
+            users.c.email,
+            users.c.display_name,
+            users.c.password_hash,
+        ).where(func.lower(users.c.email) == normalised)
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def get_user(conn: Connection, user_id: int) -> Optional[dict]:
+    row = conn.execute(
+        select(
+            users.c.id,
+            users.c.email,
+            users.c.display_name,
+            users.c.password_hash,
+        ).where(users.c.id == int(user_id))
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def set_password_hash(conn: Connection, user_id: int, password_hash: str) -> None:
+    """Used at signup and by login's transparent rehash to a higher cost."""
+    with transaction(conn):
+        conn.execute(
+            update(users)
+            .where(users.c.id == int(user_id))
+            .values(password_hash=password_hash)
+        )
 
 
 # --------------------------------------------------------------------------- courses

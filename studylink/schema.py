@@ -24,6 +24,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    func,
     Integer,
     LargeBinary,
     MetaData,
@@ -52,10 +53,23 @@ users = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("apple_sub", String(255), unique=True),
+    # Uniqueness is on lower(email), declared as an Index below rather than as a
+    # column constraint. Postgres and SQLite both compare strings
+    # case-sensitively, so a plain unique accepts Alice@x.edu alongside
+    # alice@x.edu and a login resolves to whichever row is found first.
     Column("email", String(320)),
     Column("display_name", String(255)),
+    # Null for accounts that have never set one: the seeded local user, and
+    # anyone who signs in through a provider. Its absence is what makes password
+    # login impossible for those accounts rather than a special case in the
+    # login path.
+    Column("password_hash", String(255)),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+
+# Declared here so `create_all` and Alembic produce the same shape. Both engines
+# support expression indexes, so one definition covers them.
+Index("uq_users_email_lower", func.lower(users.c.email), unique=True)
 
 
 courses = Table(
