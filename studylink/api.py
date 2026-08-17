@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
 from . import credentials
+from . import jobs as jobs_module
 from . import ratelimit
 from . import sessions as sessions_module
 from .agent import AgentUnavailable, citation_coverage
@@ -444,10 +445,19 @@ def list_notes(
 
 @api.post("/notes", status_code=201)
 def create_note(payload: NoteIn, app: StudyLink = Depends(current_app)) -> dict:
+    """Save a note and queue the reindex rather than doing it inline.
+
+    Chunking and embedding a note is not slow enough to be alarming today, but
+    it grows with the corpus and it is on the path of the most common write in
+    the app. The note is durable when this returns; it is searchable once the
+    queued job runs.
+    """
     note_id = app.add_note(
-        payload.title, payload.body, payload.course_id, payload.source_type
+        payload.title, payload.body, payload.course_id, payload.source_type,
+        reindex=False,
     )
-    return {"id": note_id}
+    job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
+    return {"id": note_id, "job": job.as_dict()}
 
 
 @api.get("/notes/{note_id}/assignments")
@@ -508,26 +518,50 @@ def canvas_disconnect(app: StudyLink = Depends(current_app)) -> dict:
     return {"connected": False, "removed": removed}
 
 
-@api.post("/sync")
+@api.post("/sync", status_code=202)
 def sync(app: StudyLink = Depends(current_app)) -> dict:
-    try:
-        result = app.sync_canvas()
-    except CanvasError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"courses": result.courses, "assignments": result.assignments, "errors": result.errors}
+    """Queue a Canvas sync and return immediately.
+
+    202, not 200: the work has been accepted, not done. Canvas sync is a
+    paginated series of calls to someone else's server, and holding a browser
+    connection open for it fails at the proxy timeout in a way the user cannot
+    act on. Poll /jobs/{id} for the outcome.
+    """
+    if app.canvas_connection() is None and not (
+        app.user.auth_source == "local" and app.settings.canvas_configured
+    ):
+        # Worth failing here rather than queueing work that cannot succeed --
+        # a job that fails 30 seconds later is a worse way to learn this.
+        raise HTTPException(
+            status_code=400,
+            detail="Canvas is not connected for this account. Connect it at "
+                   "POST /canvas/connect.",
+        )
+    return jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_CANVAS_SYNC).as_dict()
 
 
-@api.post("/reindex")
-def reindex(
-    force: bool = False, app: StudyLink = Depends(current_app)
-) -> dict:
-    stats = app.reindex(force=force)
-    return {
-        "notes_chunked": stats.notes_chunked,
-        "chunks_written": stats.chunks_written,
-        "chunk_vectors": stats.chunk_vectors,
-        "assignment_vectors": stats.assignment_vectors,
-    }
+@api.post("/reindex", status_code=202)
+def reindex(app: StudyLink = Depends(current_app)) -> dict:
+    """Queue a reindex. Poll /jobs/{id} for the outcome."""
+    return jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX).as_dict()
+
+
+@api.get("/jobs")
+def list_jobs(limit: int = 20, app: StudyLink = Depends(current_app)) -> list[dict]:
+    """This account's recent jobs, newest first."""
+    return [
+        job.as_dict()
+        for job in jobs_module.list_for_user(app.conn, app.user_id, limit=min(limit, 100))
+    ]
+
+
+@api.get("/jobs/{job_id}")
+def get_job(job_id: int, app: StudyLink = Depends(current_app)) -> dict:
+    """One job. Somebody else's job is a 404, not a 403."""
+    job = jobs_module.get(app.conn, job_id, app.user_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return job.as_dict()
 
 
 @api.post("/work-session")

@@ -19,7 +19,7 @@ from typing import Literal, Optional
 
 from . import store
 
-AuthSource = Literal["local", "password", "session", "apple", "api_key"]
+AuthSource = Literal["local", "password", "session", "job", "apple", "api_key"]
 
 
 @dataclass(frozen=True)
