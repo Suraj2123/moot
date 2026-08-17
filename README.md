@@ -93,10 +93,12 @@ above.
 ## Architecture
 
 ```
-db / store        SQLite schema and CRUD
+db / store        schema and CRUD, portable across SQLite and Postgres
 chunking          note text -> embeddable chunks (paragraph-aware, overlapping)
 embeddings        pluggable providers: hash | voyage | sentence-transformers
-vectorstore       vectors in SQLite, exact cosine search over numpy
+vectorstore       vectors in SQLite or Postgres, exact cosine search either way
+auth / sessions   signup, login, bearer tokens, revocation
+ratelimit         sliding-window limits on the auth endpoints
 indexing          keeps chunks and vectors in sync with the active config
 retrieval         note <-> assignment matching, with evidence
 agent             work-session synthesis with citation checking
@@ -110,8 +112,9 @@ service           the facade the UI, API, and scripts all drive
 | Embeddings | Provider interface, 3 impls | The eval has to compare providers on one labelled set |
 | Vector store | SQLite + numpy | Exact search on a semester of notes is sub-millisecond, and one file to back up. The interface matches Chroma's, so swapping is one file |
 | Agent | Anthropic Messages API, hand-written tool loop | The tool closes over a per-request retriever; a global would be worse than 30 lines of loop |
-| Storage | SQLite | Single user, single file, no server |
-| Frontend | Streamlit | Function over polish for v1 |
+| Auth | Opaque server-side session tokens | Revocation is a feature here, and a JWT cannot be revoked without the database lookup it was avoiding |
+| Storage | SQLite or Postgres | One schema, both engines; SQLite for local work, Postgres to host it |
+| Frontend | Streamlit | Function over polish for v1; the API is the surface a web frontend uses |
 
 ## Configuration
 
@@ -125,6 +128,9 @@ written to the database or logged.
 | `VOYAGE_API_KEY` | If using Voyage |
 | `ANTHROPIC_API_KEY` | Agent and LLM judge only; retrieval and metrics work without it |
 | `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `SCORE_THRESHOLD` | Retrieval tuning |
+| `DATABASE_URL` | Postgres URL; unset means SQLite |
+| `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the API; empty means CORS off |
+| `TRUST_PROXY_HEADERS` | Honour `X-Forwarded-For` for rate limiting. Only behind a proxy that overwrites it |
 
 ## Tests
 
@@ -132,7 +138,7 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-66 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
+199 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
 paths and skip unless you point them at a server:
 
 ```bash
@@ -143,6 +149,8 @@ CI runs both, and diffs the retrieval metrics between the two backends.
 
 ## Design notes
 
+- `docs/AUTH.md` -- the authentication model, the decisions behind it, and an
+  explicit list of what it does not defend against.
 - `docs/STORAGE.md` -- how vectors are stored and searched on each backend, why
   there is no approximate index, and the measurements that would change that.
 - `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
@@ -166,10 +174,11 @@ Working MVP.
 - [x] Retrieval evaluation: labelled set, metrics, config sweep, LLM judge
 - [x] Agent work sessions with citation traceability
 - [x] Streamlit UI + FastAPI
+- [ ] Password reset and email verification (see docs/AUTH.md)
 - [ ] Lecture audio -> transcript via Whisper (pipeline accepts transcripts already)
 - [ ] Google Classroom as a second integration
 - [ ] Background/batched indexing for large corpora
-- [ ] Multi-user accounts
+- [x] Multi-user accounts with password auth, sessions, and rate limiting
 - [ ] Export work-session output to Google Docs / Word
 
 ## License
