@@ -132,6 +132,37 @@ canvas_credentials = Table(
 )
 
 
+# Background work: indexing and Canvas sync, which are both too slow to hold a
+# request open for. Rows are the queue and the audit trail at once.
+jobs = Table(
+    "jobs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("kind", String(32), nullable=False),
+    Column("status", String(16), nullable=False, default="queued"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    # A short human-readable summary on success, or the error on failure. Never
+    # a traceback: this is returned to the user, and a traceback leaks paths and
+    # sometimes credentials from the frame locals.
+    Column("detail", Text, default=""),
+    CheckConstraint(
+        "status IN ('queued', 'running', 'succeeded', 'failed')", name="status"
+    ),
+)
+# The queue read is "oldest queued job", and the status read is "this user's
+# recent jobs". Both want this.
+Index("ix_jobs_status_created", jobs.c.status, jobs.c.created_at)
+
+
 courses = Table(
     "courses",
     metadata,
