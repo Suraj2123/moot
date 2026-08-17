@@ -279,3 +279,107 @@ def test_revoke_others_does_not_touch_another_account(client, signup):
     client.post("/auth/sessions/revoke-others", headers=auth(alice))
 
     assert client.get("/auth/me", headers=auth(bob)).status_code == 200
+
+
+# ------------------------------------------------------------ password change
+
+
+def test_changing_the_password_works_and_the_old_one_stops(client, signup):
+    token = signup(client)
+
+    response = client.post(
+        "/auth/password",
+        headers=auth(token),
+        json={"current_password": "correct horse battery",
+              "new_password": "a different long password"},
+    )
+    assert response.status_code == 200
+
+    old = client.post("/auth/login",
+                      json={"email": "alice@school.edu", "password": "correct horse battery"})
+    assert old.status_code == 401
+
+    new = client.post("/auth/login",
+                      json={"email": "alice@school.edu", "password": "a different long password"})
+    assert new.status_code == 200
+
+
+def test_changing_the_password_ends_every_other_session(client, signup):
+    """The point of the feature, and the usual way it is built wrong.
+
+    Changing a password while the attacker's session keeps working does not
+    remove the attacker.
+    """
+    stolen = signup(client)
+    mine = client.post(
+        "/auth/login",
+        json={"email": "alice@school.edu", "password": "correct horse battery"},
+    ).json()["token"]
+
+    response = client.post(
+        "/auth/password",
+        headers=auth(mine),
+        json={"current_password": "correct horse battery",
+              "new_password": "a different long password"},
+    )
+    assert response.json()["sessions_ended"] == 1
+
+    assert client.get("/auth/me", headers=auth(stolen)).status_code == 401
+    assert client.get("/auth/me", headers=auth(mine)).status_code == 200
+
+
+def test_changing_the_password_requires_the_current_one(client, signup):
+    """A stolen token alone must not be enough to take the account permanently
+    -- which is the situation this feature exists to recover from."""
+    token = signup(client)
+
+    response = client.post(
+        "/auth/password",
+        headers=auth(token),
+        json={"current_password": "not the right password",
+              "new_password": "a different long password"},
+    )
+    assert response.status_code == 401
+
+    # And the password is unchanged.
+    assert client.post(
+        "/auth/login",
+        json={"email": "alice@school.edu", "password": "correct horse battery"},
+    ).status_code == 200
+
+
+def test_the_new_password_must_be_valid_and_different(client, signup):
+    token = signup(client)
+
+    short = client.post(
+        "/auth/password",
+        headers=auth(token),
+        json={"current_password": "correct horse battery", "new_password": "short"},
+    )
+    assert short.status_code == 400
+
+    same = client.post(
+        "/auth/password",
+        headers=auth(token),
+        json={"current_password": "correct horse battery",
+              "new_password": "correct horse battery"},
+    )
+    assert same.status_code == 400
+
+
+def test_changing_a_password_does_not_touch_another_account(client, signup):
+    alice = signup(client, "alice@school.edu")
+    bob = signup(client, "bob@school.edu")
+
+    client.post(
+        "/auth/password",
+        headers=auth(alice),
+        json={"current_password": "correct horse battery",
+              "new_password": "a different long password"},
+    )
+
+    assert client.get("/auth/me", headers=auth(bob)).status_code == 200
+    assert client.post(
+        "/auth/login",
+        json={"email": "bob@school.edu", "password": "correct horse battery"},
+    ).status_code == 200

@@ -136,6 +136,45 @@ def login(
     )
 
 
+def change_password(
+    conn: Connection,
+    user_id: int,
+    current_password: str,
+    new_password: str,
+    keep_token: Optional[str] = None,
+) -> int:
+    """Replace a password, then end every other session. Returns sessions ended.
+
+    The current password is required even though the caller is already
+    authenticated. A stolen session token would otherwise be enough to take the
+    account permanently, which is precisely the situation this is used to
+    recover from.
+
+    Ending the other sessions is not housekeeping -- it is the point. Changing a
+    password while the attacker's session keeps working does not remove the
+    attacker, and that is the single most common way this feature is built
+    wrong. The caller's own session survives so that securing the account does
+    not log you out of the page you are on.
+    """
+    account = store.get_user(conn, user_id)
+    if account is None or not account.get("password_hash"):
+        raise AuthError(GENERIC_LOGIN_FAILURE)
+
+    if not passwords.verify(current_password, account["password_hash"]):
+        raise AuthError("Current password is incorrect.")
+
+    try:
+        passwords.validate(new_password)
+    except passwords.PasswordError as exc:
+        raise SignupError(str(exc)) from exc
+
+    if passwords.verify(new_password, account["password_hash"]):
+        raise SignupError("New password must be different from the current one.")
+
+    store.set_password_hash(conn, user_id, passwords.hash_password(new_password))
+    return sessions.revoke_others(conn, user_id, keep_token or "")
+
+
 def logout(conn: Connection, token: str) -> bool:
     """End one session. True if a live session was actually ended."""
     return sessions.revoke(conn, token)

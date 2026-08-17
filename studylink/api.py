@@ -117,6 +117,11 @@ class LoginIn(BaseModel):
     password: str
 
 
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class WorkSessionIn(BaseModel):
     assignment_id: int
     mode: str = Field(default="outline", pattern="^(outline|draft|summary)$")
@@ -221,6 +226,31 @@ def logout(
     token = auth_module.bearer_token(authorization)
     ended = auth_module.logout(conn, token) if token else False
     return {"ok": True, "ended": ended}
+
+
+@api.post("/auth/password")
+def change_password(
+    payload: PasswordChangeIn,
+    authorization: Optional[str] = Header(default=None),
+    user: UserContext = Depends(current_user),
+    conn=Depends(db_connection),
+) -> dict:
+    """Change the password and sign out everywhere else."""
+    token = auth_module.bearer_token(authorization)
+    try:
+        ended = auth_module.change_password(
+            conn,
+            user.user_id,
+            payload.current_password,
+            payload.new_password,
+            keep_token=token,
+        )
+    except auth_module.AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except auth_module.SignupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"ok": True, "sessions_ended": ended}
 
 
 @api.get("/auth/sessions")
