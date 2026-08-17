@@ -11,6 +11,7 @@ lines over `StudyLink`.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -39,6 +40,36 @@ api = FastAPI(title="StudyLink", version="0.1.0")
 # per-request fact instead of mutable state on a shared object that two
 # concurrent callers would race over. That race would be an authorisation bug,
 # not a performance one.
+# Browser origins allowed to call this API. Empty by default: a same-origin
+# frontend needs no CORS at all, and a wildcard would let any page on the
+# internet make authenticated calls with a user's token. This has to be an
+# explicit deployment decision.
+def allowed_origins() -> list[str]:
+    raw = os.environ.get("CORS_ALLOW_ORIGINS", "")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+@api.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Headers that matter for an API serving a browser frontend.
+
+    Not a Content-Security-Policy: this serves JSON, and a CSP belongs on the
+    document that loads the scripts, not on the API the scripts call. Claiming
+    otherwise here would be security theatre in a header nobody enforces.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Tokens live in the Authorization header rather than a cookie, so CSRF is
+    # not the threat it would otherwise be -- but a stray <iframe> embedding an
+    # error page is still worth refusing.
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    # Responses are per-user. A shared cache holding one user's notes and
+    # serving them to the next is the failure this prevents.
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 _engine = None
 
 
@@ -49,6 +80,23 @@ def engine():
         _engine = make_engine(settings.sqlalchemy_url)
         create_all(_engine)
     return _engine
+
+
+_origins = allowed_origins()
+if _origins:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        # Credentials are sent as a bearer header, not a cookie, so this stays
+        # off: turning it on with an explicit origin list is what makes a
+        # browser attach cookies to cross-origin calls, and nothing here wants
+        # that.
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 
 def db_connection():
