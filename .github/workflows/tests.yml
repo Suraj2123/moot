@@ -30,6 +30,8 @@ jobs:
       - name: Test
         # No DATABASE_URL and no STUDYLINK_TEST_POSTGRES_URL: the Postgres tests
         # skip, and this job proves the app still runs with no server at all.
+        env:
+          STUDYLINK_SECRET_KEY: v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
         run: python -m pytest tests -q
 
   postgres:
@@ -54,6 +56,10 @@ jobs:
           --health-retries 10
 
     env:
+      # Canvas tokens are encrypted at rest, and connecting one is refused
+      # without a key -- so CI needs a throwaway key or those tests cannot run
+      # the path they exist to cover.
+      STUDYLINK_SECRET_KEY: v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       # Two databases on purpose. The suite reaches the schema through
       # create_all, and Alembic has to start from an empty one -- pointing both
       # at the same database means the migration step finds the tables already
@@ -94,6 +100,14 @@ jobs:
           python -m alembic upgrade head
           python -m alembic downgrade base
           python -m alembic upgrade head
+
+      - name: The worker drains a queued job
+        env:
+          DATABASE_URL: ${{ env.TEST_DB }}
+        run: |
+          python scripts/run_worker.py --once
+          python scripts/purge_sessions.py --dry-run
+          python scripts/rotate_vault_key.py --status
 
       - name: App runs end to end on Postgres
         env:

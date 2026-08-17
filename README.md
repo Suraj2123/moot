@@ -38,6 +38,7 @@ Or drive it headlessly:
 
 ```bash
 uvicorn studylink.api:api --reload    # then GET /assignments/1/matches
+python scripts/run_worker.py          # processes indexing and sync jobs
 ```
 
 ## What's here
@@ -99,6 +100,9 @@ embeddings        pluggable providers: hash | voyage | sentence-transformers
 vectorstore       vectors in SQLite or Postgres, exact cosine search either way
 auth / sessions   signup, login, bearer tokens, revocation
 ratelimit         sliding-window limits on the auth endpoints
+vault             AES-GCM encryption for secrets that must be read back
+credentials       per-user Canvas credentials, never returned readable
+jobs / worker     background indexing and sync, claimed with a conditional UPDATE
 indexing          keeps chunks and vectors in sync with the active config
 retrieval         note <-> assignment matching, with evidence
 agent             work-session synthesis with citation checking
@@ -123,7 +127,8 @@ written to the database or logged.
 
 | Variable | Purpose |
 |---|---|
-| `CANVAS_API_URL`, `CANVAS_API_TOKEN` | Canvas sync |
+| `CANVAS_API_URL`, `CANVAS_API_TOKEN` | Local single-user Canvas sync only; web accounts connect their own |
+| `STUDYLINK_SECRET_KEY` | Encrypts stored Canvas tokens. Required before anyone can connect Canvas |
 | `EMBEDDING_PROVIDER` | `hash` (default, offline) / `voyage` / `sentence-transformers` |
 | `VOYAGE_API_KEY` | If using Voyage |
 | `ANTHROPIC_API_KEY` | Agent and LLM judge only; retrieval and metrics work without it |
@@ -138,7 +143,7 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-199 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
+282 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
 paths and skip unless you point them at a server:
 
 ```bash
@@ -149,6 +154,8 @@ CI runs both, and diffs the retrieval metrics between the two backends.
 
 ## Design notes
 
+- `docs/SECRETS.md` -- how Canvas tokens are encrypted, how to rotate the key
+  without losing them, and why background work moved off the request path.
 - `docs/AUTH.md` -- the authentication model, the decisions behind it, and an
   explicit list of what it does not defend against.
 - `docs/STORAGE.md` -- how vectors are stored and searched on each backend, why
@@ -177,7 +184,7 @@ Working MVP.
 - [ ] Password reset and email verification (see docs/AUTH.md)
 - [ ] Lecture audio -> transcript via Whisper (pipeline accepts transcripts already)
 - [ ] Google Classroom as a second integration
-- [ ] Background/batched indexing for large corpora
+- [x] Background indexing and Canvas sync, off the request path
 - [x] Multi-user accounts with password auth, sessions, and rate limiting
 - [ ] Export work-session output to Google Docs / Word
 
