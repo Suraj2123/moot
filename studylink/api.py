@@ -20,6 +20,7 @@ from pydantic import BaseModel, EmailStr, Field
 logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
+from . import ratelimit
 from .agent import AgentUnavailable, citation_coverage
 from .canvas import CanvasError
 from .context import UserContext
@@ -27,6 +28,7 @@ from .errors import CrossUserAccessError, NotFoundError
 from .config import load_settings
 from .db import create_all, make_engine
 from .pgvector_support import apply_search_tuning
+from . import store
 from .service import StudyLink
 
 api = FastAPI(title="StudyLink", version="0.1.0")
@@ -120,12 +122,24 @@ class WorkSessionIn(BaseModel):
     top_k: Optional[int] = None
 
 
+def _enforce(rule, key: str) -> None:
+    """Refuse the request if `key` has run out of budget under `rule`."""
+    decision = ratelimit.limiter.check(key, rule)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again later.",
+            headers={"Retry-After": str(int(decision.retry_after) + 1)},
+        )
+
+
 @api.post("/auth/signup", status_code=201)
 def signup(
     payload: SignupIn,
     request: Request,
     conn=Depends(db_connection),
 ) -> dict:
+    _enforce(ratelimit.SIGNUP_PER_IP, f"signup:ip:{ratelimit.client_ip(request)}")
     try:
         result = auth_module.signup(
             conn,
@@ -149,6 +163,23 @@ def login(
     request: Request,
     conn=Depends(db_connection),
 ) -> dict:
+    ip_key = f"login:ip:{ratelimit.client_ip(request)}"
+    account_key = f"login:account:{store.normalise_email(payload.email)}"
+
+    _enforce(ratelimit.LOGIN_PER_IP, ip_key)
+
+    # Checked but not consumed here: the account budget is spent only by
+    # failures, below. Counting successes would let an attacker lock out an
+    # account whose owner is legitimately using it.
+    if ratelimit.limiter.peek(account_key, ratelimit.LOGIN_PER_ACCOUNT) >= (
+        ratelimit.LOGIN_PER_ACCOUNT.limit
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again later.",
+            headers={"Retry-After": "60"},
+        )
+
     try:
         result = auth_module.login(
             conn,
@@ -157,12 +188,17 @@ def login(
             user_agent=request.headers.get("user-agent"),
         )
     except auth_module.AuthError as exc:
+        ratelimit.limiter.check(account_key, ratelimit.LOGIN_PER_ACCOUNT)
         # One status and one message for every kind of failure -- see auth.py.
         raise HTTPException(
             status_code=401,
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+
+    # A correct password clears the IP budget, so one person fat-fingering their
+    # password a few times then getting it right does not stay penalised.
+    ratelimit.limiter.reset(ip_key)
 
     return {
         "token": result.token,

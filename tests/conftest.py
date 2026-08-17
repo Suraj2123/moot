@@ -163,3 +163,43 @@ def corpus(conn, provider, config, user_id):
         "alliance_note": alliance_note,
         "unrelated_note": unrelated_note,
     }
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """A TestClient against a throwaway database.
+
+    The API's engine is a module global built on first use, so it has to be
+    reset around each test or the first test's database serves all of them.
+    The rate limiter is process-wide for the same reason.
+    """
+    from fastapi.testclient import TestClient
+
+    from studylink import api as api_module
+    from studylink import ratelimit
+
+    monkeypatch.setenv("STUDYLINK_DB", str(tmp_path / "api.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    api_module._engine = None
+    ratelimit.limiter.reset()
+
+    with TestClient(api_module.api) as test_client:
+        yield test_client
+
+    api_module._engine = None
+    ratelimit.limiter.reset()
+
+
+@pytest.fixture
+def signup():
+    """Register an account through the API and return its bearer token."""
+
+    def _signup(client, email="alice@school.edu", password="correct horse battery"):
+        response = client.post(
+            "/auth/signup", json={"email": email, "password": password}
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["token"]
+
+    return _signup

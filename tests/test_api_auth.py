@@ -14,32 +14,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from fastapi.testclient import TestClient
-
 from studylink import api as api_module
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    """A TestClient against a throwaway database.
-
-    The engine is a module global built on first use, so it has to be reset or
-    the first test's database is used by all of them.
-    """
-    monkeypatch.setenv("STUDYLINK_DB", str(tmp_path / "api.db"))
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    api_module._engine = None
-    with TestClient(api_module.api) as test_client:
-        yield test_client
-    api_module._engine = None
-
-
-def signup(client, email="alice@school.edu", password="correct horse battery"):
-    response = client.post(
-        "/auth/signup", json={"email": email, "password": password}
-    )
-    assert response.status_code == 201, response.text
-    return response.json()["token"]
 
 
 def auth(token):
@@ -59,7 +34,7 @@ def test_signup_returns_a_token_and_the_user(client):
     assert body["user"]["email"] == "alice@school.edu"
 
 
-def test_signup_rejects_a_duplicate(client):
+def test_signup_rejects_a_duplicate(client, signup):
     signup(client)
     response = client.post(
         "/auth/signup",
@@ -75,7 +50,7 @@ def test_signup_rejects_a_weak_password(client):
     assert response.status_code == 400
 
 
-def test_login_then_me(client):
+def test_login_then_me(client, signup):
     signup(client)
     response = client.post(
         "/auth/login",
@@ -90,7 +65,7 @@ def test_login_then_me(client):
     assert me.json()["auth_source"] == "session"
 
 
-def test_login_failures_are_indistinguishable(client):
+def test_login_failures_are_indistinguishable(client, signup):
     signup(client)
     responses = [
         client.post("/auth/login", json={"email": "alice@school.edu", "password": "wrong password"}),
@@ -100,7 +75,7 @@ def test_login_failures_are_indistinguishable(client):
     assert len({r.json()["detail"] for r in responses}) == 1
 
 
-def test_logout_ends_the_session(client):
+def test_logout_ends_the_session(client, signup):
     token = signup(client)
     assert client.get("/auth/me", headers=auth(token)).status_code == 200
 
@@ -162,7 +137,7 @@ def test_every_endpoint_refuses_a_garbage_token(client, method, path):
     assert response.status_code == 401
 
 
-def test_a_revoked_token_stops_working_everywhere(client):
+def test_a_revoked_token_stops_working_everywhere(client, signup):
     token = signup(client)
     client.post("/auth/logout", headers=auth(token))
 
@@ -175,7 +150,7 @@ def test_a_revoked_token_stops_working_everywhere(client):
 # ------------------------------------------------------------------ isolation
 
 
-def test_one_users_notes_are_invisible_to_another(client):
+def test_one_users_notes_are_invisible_to_another(client, signup):
     """The whole point of the day. Same topic on both sides, so a scoping bug
     surfaces as the other user's note rather than as an empty list."""
     alice = signup(client, "alice@school.edu")
@@ -202,7 +177,7 @@ def test_one_users_notes_are_invisible_to_another(client):
     assert "BOB-SECRET-TOKEN" not in alice_search.text
 
 
-def test_fetching_another_users_note_is_a_404_not_a_403(client):
+def test_fetching_another_users_note_is_a_404_not_a_403(client, signup):
     """A 403 confirms the row exists and belongs to somebody else, which is the
     fact worth hiding."""
     alice = signup(client, "alice@school.edu")
