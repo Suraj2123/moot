@@ -11,7 +11,7 @@ Two things get tested here, and the second is the one worth the file:
 
 from __future__ import annotations
 
-import os
+import re
 
 import pytest
 from studylink import api as api_module
@@ -98,6 +98,15 @@ PUBLIC_PATHS = {"/auth/signup", "/auth/login", "/auth/logout",
                 "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
 
 
+def concrete(path: str) -> str:
+    """Fill any path parameter with 1, so this keeps working for new routes.
+
+    Naming the parameters individually is the same trap as hand-listing the
+    routes: it works until someone adds one.
+    """
+    return re.sub(r"\{[^}]+\}", "1", path)
+
+
 def protected_routes():
     """Every route that is supposed to require authentication.
 
@@ -123,17 +132,15 @@ def test_there_are_protected_routes_to_check():
 
 @pytest.mark.parametrize("method,path", protected_routes())
 def test_every_endpoint_refuses_an_anonymous_request(client, method, path):
-    concrete = path.replace("{assignment_id}", "1").replace("{note_id}", "1")
-    response = client.request(method, concrete, json={})
+    response = client.request(method, concrete(path), json={})
     assert response.status_code == 401, (
-        f"{method} {concrete} answered {response.status_code} without a token"
+        f"{method} {concrete(path)} answered {response.status_code} without a token"
     )
 
 
 @pytest.mark.parametrize("method,path", protected_routes())
 def test_every_endpoint_refuses_a_garbage_token(client, method, path):
-    concrete = path.replace("{assignment_id}", "1").replace("{note_id}", "1")
-    response = client.request(method, concrete, json={}, headers=auth("nonsense"))
+    response = client.request(method, concrete(path), json={}, headers=auth("nonsense"))
     assert response.status_code == 401
 
 
@@ -142,9 +149,9 @@ def test_a_revoked_token_stops_working_everywhere(client, signup):
     client.post("/auth/logout", headers=auth(token))
 
     for method, path in protected_routes():
-        concrete = path.replace("{assignment_id}", "1").replace("{note_id}", "1")
-        response = client.request(method, concrete, json={}, headers=auth(token))
-        assert response.status_code == 401, f"{method} {concrete} still accepted it"
+        target = concrete(path)
+        response = client.request(method, target, json={}, headers=auth(token))
+        assert response.status_code == 401, f"{method} {target} still accepted it"
 
 
 # ------------------------------------------------------------------ isolation
@@ -192,3 +199,83 @@ def test_fetching_another_users_note_is_a_404_not_a_403(client, signup):
     response = client.get(f"/notes/{created['id']}/assignments", headers=auth(bob))
     assert response.status_code == 404
     assert "ALICE-SECRET-TOKEN" not in response.text
+
+
+# ----------------------------------------------------------- session management
+
+
+def test_listing_sessions_shows_only_your_own(client, signup):
+    alice = signup(client, "alice@school.edu")
+    signup(client, "bob@school.edu")
+    client.post("/auth/login", json={"email": "alice@school.edu", "password": "correct horse battery"})
+
+    listed = client.get("/auth/sessions", headers=auth(alice)).json()
+    assert len(listed) == 2  # signup issued one, login another
+    assert all("token" not in str(k).lower() for row in listed for k in row)
+
+
+def test_session_listing_never_returns_token_hashes(client, signup):
+    """Useless to the owner, and one stray log line from being a problem."""
+    token = signup(client)
+    body = client.get("/auth/sessions", headers=auth(token)).text
+    assert "token_hash" not in body
+    assert token not in body
+
+
+def test_revoking_your_own_session_ends_it(client, signup):
+    token = signup(client)
+    other = client.post(
+        "/auth/login",
+        json={"email": "alice@school.edu", "password": "correct horse battery"},
+    ).json()["token"]
+
+    # Newest first, so [-1] is the session signup issued -- revoke that one while
+    # authenticated as the newer session, or the request kills its own caller.
+    listed = client.get("/auth/sessions", headers=auth(other)).json()
+    target = listed[-1]
+
+    assert client.delete(f"/auth/sessions/{target['id']}", headers=auth(other)).status_code == 200
+
+    remaining = client.get("/auth/sessions", headers=auth(other)).json()
+    assert target["id"] not in [s["id"] for s in remaining]
+    assert client.get("/auth/me", headers=auth(token)).status_code == 401
+
+
+def test_you_cannot_revoke_someone_elses_session(client, signup):
+    """The ownership predicate is in the WHERE clause; this is what proves it."""
+    alice = signup(client, "alice@school.edu")
+    bob = signup(client, "bob@school.edu")
+
+    alice_session = client.get("/auth/sessions", headers=auth(alice)).json()[0]
+
+    response = client.delete(f"/auth/sessions/{alice_session['id']}", headers=auth(bob))
+    assert response.status_code == 404
+
+    # And Alice's session still works.
+    assert client.get("/auth/me", headers=auth(alice)).status_code == 200
+
+
+def test_revoke_others_keeps_the_calling_session(client, signup):
+    """Logging yourself out as a side effect of securing your account is a small
+    thing that stops people pressing the button."""
+    first = signup(client)
+    second = client.post(
+        "/auth/login",
+        json={"email": "alice@school.edu", "password": "correct horse battery"},
+    ).json()["token"]
+
+    response = client.post("/auth/sessions/revoke-others", headers=auth(second))
+    assert response.status_code == 200
+    assert response.json()["ended"] == 1
+
+    assert client.get("/auth/me", headers=auth(second)).status_code == 200
+    assert client.get("/auth/me", headers=auth(first)).status_code == 401
+
+
+def test_revoke_others_does_not_touch_another_account(client, signup):
+    alice = signup(client, "alice@school.edu")
+    bob = signup(client, "bob@school.edu")
+
+    client.post("/auth/sessions/revoke-others", headers=auth(alice))
+
+    assert client.get("/auth/me", headers=auth(bob)).status_code == 200

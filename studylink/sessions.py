@@ -168,6 +168,82 @@ def resolve(conn: Connection, token: str) -> Optional[Session]:
     )
 
 
+def list_for_user(conn: Connection, user_id: int) -> list[dict]:
+    """Every live session for one account, newest first.
+
+    Deliberately does not return token hashes. The point of this endpoint is to
+    let someone see and end their own sessions, and a hash is both useless to
+    them and one accidental log line away from being a problem. Sessions are
+    addressed by their integer id instead.
+    """
+    rows = conn.execute(
+        select(
+            sessions.c.id,
+            sessions.c.created_at,
+            sessions.c.expires_at,
+            sessions.c.user_agent,
+        )
+        .where(
+            sessions.c.user_id == int(user_id),
+            sessions.c.revoked_at.is_(None),
+            sessions.c.expires_at > _now(),
+        )
+        .order_by(sessions.c.created_at.desc())
+    ).mappings().all()
+
+    return [
+        {
+            "id": int(row["id"]),
+            "created_at": _as_utc(row["created_at"]).isoformat(),
+            "expires_at": _as_utc(row["expires_at"]).isoformat(),
+            "user_agent": row["user_agent"],
+        }
+        for row in rows
+    ]
+
+
+def revoke_by_id(conn: Connection, session_id: int, user_id: int) -> bool:
+    """End one session by id, but only if it belongs to `user_id`.
+
+    The ownership predicate is in the WHERE clause rather than in a check before
+    it. A read-then-write leaves a window, and more importantly it is the kind
+    of check that gets refactored away -- here, ending someone else's session
+    simply matches no rows.
+    """
+    with transaction(conn):
+        result = conn.execute(
+            update(sessions)
+            .where(
+                sessions.c.id == int(session_id),
+                sessions.c.user_id == int(user_id),
+                sessions.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=_now())
+        )
+    return result.rowcount > 0
+
+
+def revoke_others(conn: Connection, user_id: int, keep_token: str) -> int:
+    """End every session for this user except the one making the request.
+
+    "Sign out everywhere else" rather than "everywhere": logging yourself out as
+    a side effect of securing your account is a small thing that makes people
+    not press the button.
+    """
+    keep = resolve(conn, keep_token)
+    keep_id = keep.id if keep else None
+
+    with transaction(conn):
+        statement = update(sessions).where(
+            sessions.c.user_id == int(user_id),
+            sessions.c.revoked_at.is_(None),
+        )
+        if keep_id is not None:
+            statement = statement.where(sessions.c.id != keep_id)
+        result = conn.execute(statement.values(revoked_at=_now()))
+    return int(result.rowcount)
+
+
 def revoke(conn: Connection, token: str) -> bool:
     """End one session. Returns whether a live session was actually ended."""
     if not token:

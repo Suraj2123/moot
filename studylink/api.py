@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
 from . import ratelimit
+from . import sessions as sessions_module
 from .agent import AgentUnavailable, citation_coverage
 from .canvas import CanvasError
 from .context import UserContext
@@ -219,6 +220,43 @@ def logout(
     """
     token = auth_module.bearer_token(authorization)
     ended = auth_module.logout(conn, token) if token else False
+    return {"ok": True, "ended": ended}
+
+
+@api.get("/auth/sessions")
+def list_sessions(
+    user: UserContext = Depends(current_user),
+    conn=Depends(db_connection),
+) -> list[dict]:
+    """The caller's own live sessions. Never anyone else's, and no token hashes."""
+    return sessions_module.list_for_user(conn, user.user_id)
+
+
+@api.delete("/auth/sessions/{session_id}")
+def revoke_session(
+    session_id: int,
+    user: UserContext = Depends(current_user),
+    conn=Depends(db_connection),
+) -> dict:
+    """End one of the caller's sessions.
+
+    404 rather than 403 when the session belongs to somebody else, for the same
+    reason cross-user row access is a 404: a 403 confirms it exists.
+    """
+    if not sessions_module.revoke_by_id(conn, session_id, user.user_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
+@api.post("/auth/sessions/revoke-others")
+def revoke_other_sessions(
+    authorization: Optional[str] = Header(default=None),
+    user: UserContext = Depends(current_user),
+    conn=Depends(db_connection),
+) -> dict:
+    """Sign out everywhere else, keeping the session making this request."""
+    token = auth_module.bearer_token(authorization)
+    ended = sessions_module.revoke_others(conn, user.user_id, token or "")
     return {"ok": True, "ended": ended}
 
 
