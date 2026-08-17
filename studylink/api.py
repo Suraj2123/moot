@@ -21,6 +21,7 @@ from pydantic import BaseModel, EmailStr, Field
 logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
+from . import credentials
 from . import ratelimit
 from . import sessions as sessions_module
 from .agent import AgentUnavailable, citation_coverage
@@ -163,6 +164,11 @@ class SignupIn(BaseModel):
 class LoginIn(BaseModel):
     email: str
     password: str
+
+
+class CanvasConnectIn(BaseModel):
+    api_url: str
+    api_token: str
 
 
 class PasswordChangeIn(BaseModel):
@@ -466,6 +472,40 @@ def search(
     q: str, top_k: int = 5, app: StudyLink = Depends(current_app)
 ) -> list[dict]:
     return [m.as_dict() for m in app.search_notes(q, top_k=top_k)]
+
+
+@api.get("/canvas")
+def canvas_status(app: StudyLink = Depends(current_app)) -> dict:
+    """Whether this account has Canvas connected. Never returns the token."""
+    connection = app.canvas_connection()
+    if connection is None:
+        return {"connected": False}
+    return {"connected": True, **connection.as_dict()}
+
+
+@api.post("/canvas/connect")
+def canvas_connect(
+    payload: CanvasConnectIn,
+    app: StudyLink = Depends(current_app),
+) -> dict:
+    """Store this account's Canvas credentials, encrypted.
+
+    The response echoes the URL and never the token -- there is no read path for
+    a stored token outside the syncer, deliberately.
+    """
+    try:
+        connection = credentials.connect_canvas(
+            app.conn, app.user_id, payload.api_url, payload.api_token
+        )
+    except credentials.CredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"connected": True, **connection.as_dict()}
+
+
+@api.delete("/canvas")
+def canvas_disconnect(app: StudyLink = Depends(current_app)) -> dict:
+    removed = credentials.disconnect(app.conn, app.user_id)
+    return {"connected": False, "removed": removed}
 
 
 @api.post("/sync")

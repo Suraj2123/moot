@@ -14,9 +14,9 @@ from typing import Optional
 
 from sqlalchemy import Connection, func, select
 
-from . import schema, store
+from . import credentials, schema, store
 from .agent import WorkSessionAgent
-from .canvas import CanvasClient, SyncResult, sync_all
+from .canvas import CanvasClient, CanvasError, SyncResult, sync_all
 from .config import RetrievalConfig, Settings, load_settings
 from .context import UserContext
 from .db import connect
@@ -108,10 +108,36 @@ class StudyLink:
 
     # -------------------------------------------------------------------- canvas
 
+    def canvas_connection(self):
+        """This user's Canvas connection status, or None. Never a token."""
+        return credentials.get_connection(self.conn, self.user_id)
+
     def sync_canvas(self) -> SyncResult:
-        client = CanvasClient(self.settings.canvas_api_url, self.settings.canvas_api_token)
+        """Sync using *this user's* stored credentials.
+
+        Falls back to the environment only when nothing is stored and the
+        acting user is the local one. That keeps the CLI, the seeder, and
+        single-user local development working exactly as before, while making it
+        impossible for a web request to pick up somebody else's token from the
+        process environment.
+        """
+        stored = credentials.get_token(self.conn, self.user_id)
+        if stored is not None:
+            api_url, api_token = stored
+        elif self.user.auth_source == "local" and self.settings.canvas_configured:
+            api_url, api_token = self.settings.canvas_api_url, self.settings.canvas_api_token
+        else:
+            raise CanvasError(
+                "Canvas is not connected for this account. Connect it at "
+                "POST /canvas/connect."
+            )
+
+        client = CanvasClient(api_url, api_token)
         result = sync_all(self.conn, client, self.user_id)
         self.indexer.embed_assignments()
+
+        if stored is not None:
+            credentials.mark_verified(self.conn, self.user_id)
         return result
 
     # --------------------------------------------------------------------- notes
