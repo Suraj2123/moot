@@ -171,3 +171,29 @@ def test_deleting_a_user_takes_their_sessions(conn, alice):
 
     assert sessions.resolve(conn, token) is None
     assert conn.execute(sessions.sessions.select()).first() is None
+
+
+def test_purge_honours_a_cutoff(conn, alice):
+    """`--older-than-days` keeps a grace period, so a purge run against
+    production does not have to be all-or-nothing."""
+    from datetime import datetime, timezone
+
+    recently_expired, _ = sessions.create(conn, alice, ttl=timedelta(hours=-1))
+    long_expired, _ = sessions.create(conn, alice, ttl=timedelta(days=-10))
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+    assert sessions.purge_expired(conn, before=cutoff) == 1
+
+    rows = conn.execute(sessions.sessions.select()).mappings().all()
+    assert len(rows) == 1  # the recently expired one survives the grace period
+
+
+def test_purge_never_removes_a_live_session(conn, alice):
+    """The delete is keyed on expires_at, not on revoked_at -- a revoked but
+    unexpired session is still a row someone may want to see in their history."""
+    live, _ = sessions.create(conn, alice, ttl=timedelta(days=1))
+    revoked, _ = sessions.create(conn, alice, ttl=timedelta(days=1))
+    sessions.revoke(conn, revoked)
+
+    assert sessions.purge_expired(conn) == 0
+    assert sessions.resolve(conn, live) is not None
