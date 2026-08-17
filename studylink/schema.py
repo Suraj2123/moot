@@ -101,6 +101,37 @@ sessions = Table(
 )
 
 
+# One row per user who has connected Canvas. The token is stored encrypted by
+# `vault`, and this table never holds a readable one.
+#
+# A separate table rather than columns on `users` because the lifetimes differ:
+# disconnecting Canvas deletes a row here and leaves the account untouched, and
+# a table nobody joins to by default is one fewer way for a token to end up in
+# a SELECT * somewhere it should not be.
+canvas_credentials = Table(
+    "canvas_credentials",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("api_url", Text, nullable=False),
+    Column("encrypted_token", Text, nullable=False),
+    # Denormalised from the ciphertext so a rotation script can find rows to
+    # re-encrypt with an indexed query rather than parsing every value.
+    Column("key_version", String(16), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    # Set after a successful sync, so the UI can say when it last worked without
+    # implying the credentials are good just because they exist.
+    Column("verified_at", DateTime(timezone=True)),
+)
+
+
 courses = Table(
     "courses",
     metadata,
