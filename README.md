@@ -181,6 +181,8 @@ CI runs both, and diffs the retrieval metrics between the two backends.
   there is no approximate index, and the measurements that would change that.
 - `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
   decisions behind it.
+- `docs/DEPLOY.md` -- what has to run in production, the two configs shipped
+  (Fly and Railway), and what preflight refuses to boot with.
 
 ## Learning path
 
