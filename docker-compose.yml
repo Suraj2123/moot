@@ -1,0 +1,85 @@
+# Local Postgres + web + worker, matching production topology.
+#
+# Two things this exists to prove locally, before a deploy proves them
+# expensively:
+#   1. Web and worker run in separate processes on separate containers,
+#      sharing a database. Anything that only works because they share
+#      memory breaks here first.
+#   2. The image runs end to end without a per-machine venv.
+#
+#   docker compose up --build
+#   docker compose run --rm web python scripts/seed_demo.py --account demo@school.edu
+#   open http://127.0.0.1:8000
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: studylink
+      POSTGRES_PASSWORD: studylink
+      POSTGRES_DB: studylink
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      # Exposed so `psql` from the host works; drop this line if you don't
+      # want the port bound.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studylink -d studylink"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: apply migrations, then exit. Web and worker depend on it
+  # having succeeded, so two web replicas cannot race to migrate.
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://studylink:studylink@db:5432/studylink
+      STUDYLINK_ENV: development
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  web:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg2://studylink:studylink@db:5432/studylink
+      STUDYLINK_SECRET_KEY: ${STUDYLINK_SECRET_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
+      LLM_MONTHLY_BUDGET_USD: ${LLM_MONTHLY_BUDGET_USD:-2.00}
+      # Development, not production -- preflight warnings stay warnings so
+      # missing keys don't block boot on a dev machine.
+      STUDYLINK_ENV: development
+      PORT: "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg2://studylink:studylink@db:5432/studylink
+      STUDYLINK_SECRET_KEY: ${STUDYLINK_SECRET_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
+      STUDYLINK_ENV: development
+    command: ["python", "scripts/run_worker.py"]
+
+volumes:
+  db-data:
