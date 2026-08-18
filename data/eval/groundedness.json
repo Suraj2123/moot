@@ -1,0 +1,42 @@
+[
+  {
+    "question": "How does the learning rate affect gradient descent?",
+    "answerable": true,
+    "note": "Directly covered by the gradient descent lecture note."
+  },
+  {
+    "question": "What happens if the learning rate is too large?",
+    "answerable": true,
+    "note": "Stated explicitly in the notes -- the loss diverges."
+  },
+  {
+    "question": "What was the alliance structure in Europe before 1914?",
+    "answerable": true,
+    "note": "Covered by the alliance system note."
+  },
+  {
+    "question": "Why did the Marshall Plan tie European economies to the US?",
+    "answerable": true,
+    "note": "Covered by the postwar reconstruction note."
+  },
+  {
+    "question": "What is the melting point of tungsten?",
+    "answerable": false,
+    "note": "Not in any note. A model answering from general knowledge fails here."
+  },
+  {
+    "question": "Who won the 2022 FIFA World Cup?",
+    "answerable": false,
+    "note": "Widely known and completely absent from the corpus -- the temptation case."
+  },
+  {
+    "question": "What did the lecturer say about transformer attention heads?",
+    "answerable": false,
+    "note": "Plausible for this course and not actually in the notes."
+  },
+  {
+    "question": "What grade did I get on problem set 3?",
+    "answerable": false,
+    "note": "Sounds like something the app would know and is nowhere in the notes."
+  }
+]
