@@ -94,8 +94,14 @@ def test_logout_is_always_ok(client):
 # --------------------------------------------------------------- the boundary
 
 
+# Public on purpose. The first three are how you get a session in the first
+# place; the docs routes are FastAPI's own. `/` and `/app/...` serve the built
+# frontend, which has to load before anyone can sign in -- it is static files
+# with no user data in them, and every call the app then makes is authenticated
+# individually.
 PUBLIC_PATHS = {"/auth/signup", "/auth/login", "/auth/logout",
-                "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
+                "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect",
+                "/", "/app/{path:path}"}
 
 
 def concrete(path: str) -> str:
@@ -122,6 +128,24 @@ def protected_routes():
         for method in methods & {"GET", "POST", "PUT", "PATCH", "DELETE"}:
             found.append((method, path))
     return sorted(found)
+
+
+def test_serving_the_frontend_exposes_no_user_data(client, signup):
+    """`/app/...` is public, so it must be static files and nothing else.
+
+    A path traversal here would turn the one unauthenticated route into a file
+    reader, so the traversal attempt is asserted rather than assumed.
+    """
+    token = signup(client)
+    client.post("/notes", headers=auth(token),
+                json={"title": "Private", "body": "ALICE-SECRET-TOKEN"})
+
+    for path in ["/app/", "/app/index.html", "/app/../../studylink/api.py",
+                 "/app/%2e%2e/%2e%2e/etc/passwd"]:
+        response = client.get(path)
+        assert "ALICE-SECRET-TOKEN" not in response.text, path
+        assert "STUDYLINK_SECRET_KEY" not in response.text, path
+        assert "root:" not in response.text, path
 
 
 def test_there_are_protected_routes_to_check():

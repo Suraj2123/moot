@@ -21,6 +21,7 @@ from studylink import store  # noqa: E402
 from studylink.config import load_settings  # noqa: E402
 from studylink.context import UserContext  # noqa: E402
 from studylink.db import reset  # noqa: E402
+from studylink import passwords  # noqa: E402
 from studylink.evaluation.dataset import LabeledPair, save_labels, sync_to_db  # noqa: E402
 from studylink.service import StudyLink  # noqa: E402
 
@@ -457,6 +458,13 @@ LABELS = [
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep", action="store_true", help="Do not wipe existing data first")
+    parser.add_argument(
+        "--account",
+        metavar="EMAIL",
+        help="seed into a real sign-in account instead of the local user, "
+             "so the web UI has something to show on first run",
+    )
+    parser.add_argument("--password", default="correct horse battery")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -467,6 +475,24 @@ def main() -> int:
         # reset() clears the users table too, so the context resolved at
         # construction now points at a row that no longer exists.
         app.user = UserContext.local(app.conn)
+
+    if args.account:
+        # The web UI serves whoever is signed in, and the local user has no
+        # password, so seeding into it leaves a browser with an empty account
+        # and no obvious reason why. This creates one you can actually log into.
+        existing = store.get_user_by_email(app.conn, args.account)
+        if existing:
+            user_id = existing["id"]
+        else:
+            user_id = store.create_user(
+                app.conn,
+                email=args.account,
+                password_hash=passwords.hash_password(args.password),
+            )
+        app.user = UserContext(
+            user_id=user_id, auth_source="password", email=args.account
+        )
+
 
     course_ids: dict[str, int] = {}
     for canvas_id, name, code in COURSES:
@@ -511,7 +537,9 @@ def main() -> int:
     print(f"  index:       {stats.summary}")
     print(f"  provider:    {status.provider}")
     print(f"  labels:      {written} pair(s) -> {settings.labels_path}")
-    print("\nNext: streamlit run app.py    (or: python scripts/run_eval.py --sweep)")
+    if args.account:
+        print(f"\n  sign in:     {args.account} / {args.password}")
+    print("\nNext: uvicorn studylink.api:api    then open http://127.0.0.1:8000")
     return 0
 
 

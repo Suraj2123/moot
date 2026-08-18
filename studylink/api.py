@@ -13,10 +13,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -379,6 +385,50 @@ def _cross_user(request, exc: CrossUserAccessError):
 @api.exception_handler(NotFoundError)
 def _not_found(request, exc: NotFoundError):
     return JSONResponse(status_code=404, content={"detail": "not found"})
+
+
+# ------------------------------------------------------------------ the site
+#
+# The built frontend is served by the same process as the API. One thing to
+# deploy, one origin, and therefore no CORS to configure in production -- the
+# CORS settings exist for a separate dev server, not for the shipped app.
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+@api.get("/", include_in_schema=False)
+def root():
+    """Send people to the app, or tell them how to build it."""
+    if (STATIC_DIR / "index.html").exists():
+        return RedirectResponse("/app/")
+    return JSONResponse(
+        {
+            "detail": "The web UI has not been built yet.",
+            "build": "cd web && npm install && npm run build",
+            "api_docs": "/docs",
+        }
+    )
+
+
+@api.get("/app/{path:path}", include_in_schema=False)
+def spa(path: str):
+    """Serve the built app, falling back to index.html.
+
+    The fallback is what makes client-side routing work: any path under /app/
+    that is not a real file is the app's own route, not a 404. Paths are
+    resolved and checked to stay inside the static directory, so `..` segments
+    cannot walk out of it and read arbitrary files.
+    """
+    index = STATIC_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="The web UI has not been built.")
+
+    if path:
+        candidate = (STATIC_DIR / path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(STATIC_DIR.resolve()):
+            return FileResponse(candidate)
+
+    return FileResponse(index)
 
 
 @api.get("/health")
