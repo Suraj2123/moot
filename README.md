@@ -32,6 +32,7 @@ Measure retrieval quality:
 python scripts/run_eval.py            # score the current configuration
 python scripts/run_eval.py --sweep    # grid-search chunking and thresholds
 python scripts/run_eval.py --judge    # validate the LLM judge against hand labels
+python scripts/run_groundedness.py    # does the chat stay inside your notes?
 ```
 
 Or drive it headlessly:
@@ -67,6 +68,13 @@ immediately exposes a match that scored 0.495 on the words `effect`, `under`,
 positives *and* deliberate distractors), precision@k / recall@k / MRR / nDCG /
 MAP, a configuration sweep that reindexes per candidate, and an LLM judge that
 reports Cohen's kappa against the hand labels before you're allowed to trust it.
+
+**Ask your notes** -- a chat that answers questions from your own notes with
+inline citations, and refuses when the notes do not cover it. Three layers
+enforce that: no retrieval means no model call at all, the prompt states the
+constraint, and every citation is resolved against the notes actually supplied
+so an invented one is reported rather than displayed. Spend is metered per
+account against a monthly allowance.
 
 **Agent work sessions** — pick an assignment, get matched notes pulled
 automatically, and an agent produces a study outline, draft skeleton, or concept
@@ -105,7 +113,9 @@ credentials       per-user Canvas credentials, never returned readable
 jobs / worker     background indexing and sync, claimed with a conditional UPDATE
 indexing          keeps chunks and vectors in sync with the active config
 retrieval         note <-> assignment matching, with evidence
+chat              grounded Q&A over your notes, with citation checking
 agent             work-session synthesis with citation checking
+usage             per-user LLM cost ledger and monthly cap
 evaluation        labelled set, metrics, LLM judge, config sweep
 service           the facade the UI, API, and scripts all drive
 ```
@@ -131,7 +141,8 @@ written to the database or logged.
 | `STUDYLINK_SECRET_KEY` | Encrypts stored Canvas tokens. Required before anyone can connect Canvas |
 | `EMBEDDING_PROVIDER` | `hash` (default, offline) / `voyage` / `sentence-transformers` |
 | `VOYAGE_API_KEY` | If using Voyage |
-| `ANTHROPIC_API_KEY` | Agent and LLM judge only; retrieval and metrics work without it |
+| `ANTHROPIC_API_KEY` | Chat, agent, and LLM judge; retrieval and metrics work without it |
+| `LLM_MONTHLY_BUDGET_USD` | Per-user AI allowance over a rolling 30 days. 0 disables the cap |
 | `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `SCORE_THRESHOLD` | Retrieval tuning |
 | `DATABASE_URL` | Postgres URL; unset means SQLite |
 | `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the API; empty means CORS off |
@@ -143,7 +154,7 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-282 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
+355 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
 paths and skip unless you point them at a server:
 
 ```bash
@@ -154,6 +165,8 @@ CI runs both, and diffs the retrieval metrics between the two backends.
 
 ## Design notes
 
+- `docs/LLM.md` -- the grounding rules the chat works under, how they are
+  measured, and what they do not promise.
 - `docs/SECRETS.md` -- how Canvas tokens are encrypted, how to rotate the key
   without losing them, and why background work moved off the request path.
 - `docs/AUTH.md` -- the authentication model, the decisions behind it, and an
