@@ -1,0 +1,91 @@
+# Fly.io deployment for StudyLink.
+#
+# One image, two processes: web serves HTTP, worker drains the jobs table.
+# Rename `app` to something available on Fly before first deploy.
+#
+# First-time setup, from a machine with `flyctl` installed:
+#
+#   fly launch --no-deploy --copy-config     # creates app + Postgres attach
+#   fly postgres create --name studylink-db  # if you didn't attach one above
+#   fly postgres attach studylink-db         # sets DATABASE_URL in secrets
+#   fly secrets set \
+#     STUDYLINK_SECRET_KEY="$(python -c 'from studylink.vault import generate_key; print(generate_key())')" \
+#     ANTHROPIC_API_KEY=sk-ant-... \
+#     STUDYLINK_ENV=production
+#   fly deploy
+#
+# On every deploy, `release_command` runs migrations once against the new
+# image, then Fly rolls out web and worker. If migrations fail the deploy
+# aborts before any process starts.
+
+app = "studylink"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
+  strategy = "rolling"
+
+[processes]
+  web    = "uvicorn studylink.api:api --host 0.0.0.0 --port 8000"
+  worker = "python scripts/run_worker.py"
+
+# HTTP service maps to the web process only. The worker has no listener and
+# is not routable from the internet.
+[[services]]
+  processes = ["web"]
+  internal_port = 8000
+  protocol = "tcp"
+  auto_stop_machines = false   # keep the worker's siblings warm; cold-start
+                               # kills SSE mid-answer
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+  # Liveness. Fly restarts the machine on failure -- point at /healthz, which
+  # touches nothing, not at /readyz, which is allowed to be red during a
+  # database outage.
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "get"
+    path = "/healthz"
+    protocol = "http"
+
+[env]
+  # Structured logs and never-cached templates are the sane defaults.
+  PYTHONUNBUFFERED = "1"
+  PYTHONDONTWRITEBYTECODE = "1"
+
+# Web is small; the worker only needs enough memory to embed a batch. Bump
+# `worker` if you switch to sentence-transformers, which pulls in torch.
+[[vm]]
+  processes = ["web"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "512mb"

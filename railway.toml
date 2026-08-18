@@ -1,0 +1,41 @@
+# Railway deployment for StudyLink.
+#
+# One image, two services in Railway's project view: `web` and `worker`,
+# both pointed at this repo, both using this file. Railway lets each
+# service pick a different `startCommand` while sharing the same build --
+# which is what makes the split work.
+#
+# Setup (from railway.app or `railway` CLI):
+#   1. Create a project, then add a Postgres plugin. Railway sets DATABASE_URL
+#      automatically on every service it is linked to.
+#   2. Add the `web` service from this repo. In its Settings, set
+#      customStartCommand to the [deploy.web] value below.
+#   3. Add the `worker` service from this repo. Set customStartCommand to
+#      [deploy.worker].
+#   4. Set the shared secrets on both services:
+#        STUDYLINK_SECRET_KEY  (from `python -c 'from studylink.vault import generate_key; print(generate_key())'`)
+#        ANTHROPIC_API_KEY
+#        STUDYLINK_ENV=production
+#   5. On the `web` service only, expose port 8000 as a public domain.
+#
+# Migrations run in the web service's release phase so they happen exactly
+# once per deploy, before the new process serves traffic.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The default startCommand for a service that does not override it. The web
+# service uses this as-is; the worker service overrides it in its own
+# settings (Railway's UI writes to per-service config, not to this file).
+startCommand = "alembic upgrade head && uvicorn studylink.api:api --host 0.0.0.0 --port $PORT"
+
+# Railway restarts the process on non-zero exit. Cap the loop so a broken
+# build does not burn credits pinning to 100% CPU.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Liveness probe. Same reasoning as fly.toml: /healthz, not /readyz.
+healthcheckPath = "/healthz"
+healthcheckTimeout = 10
