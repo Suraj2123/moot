@@ -41,6 +41,7 @@ from typing import Iterator, Optional
 from sqlalchemy import Connection
 
 from .agent import AgentUnavailable, extract_citations
+from . import usage
 from .config import AGENT_MODEL
 from .models import NoteMatch
 from .retrieval import Retriever
@@ -183,12 +184,17 @@ class NoteChat:
         self,
         conn: Connection,
         retriever: Retriever,
+        user_id: int,
         client=None,
         model: str = AGENT_MODEL,
         max_tokens: int = 2000,
     ) -> None:
         self.conn = conn
         self.retriever = retriever
+        # Whose budget this spends and whose ledger it writes to. Explicit rather
+        # than read off the retriever, so the accounting is visibly per-user at
+        # this layer rather than inherited from one below.
+        self.user_id = int(user_id)
         self.model = model
         self.max_tokens = max_tokens
         self._client = client
@@ -271,6 +277,10 @@ class NoteChat:
             # happens cannot invent an answer.
             return Answer(text=REFUSAL, refused=True)
 
+        # After retrieval, so a refusal costs nothing and never counts against
+        # an allowance.
+        usage.check_budget(self.conn, self.user_id)
+
         with self._create(self._messages(question, build_context(matches), history or [])) as stream:
             message = stream.get_final_message()
 
@@ -303,6 +313,8 @@ class NoteChat:
             yield {"type": "done", "answer": Answer(text=REFUSAL, refused=True).as_dict()}
             return
 
+        usage.check_budget(self.conn, self.user_id)
+
         yield {
             "type": "sources",
             "sources": [
@@ -326,13 +338,23 @@ class NoteChat:
         offered = {m.note.id for m in matches}
         cited = extract_citations(text)
 
-        usage = {}
+        usage_data = {}
         raw = getattr(message, "usage", None)
         if raw is not None:
-            usage = {
+            usage_data = {
                 "input_tokens": getattr(raw, "input_tokens", 0) or 0,
                 "output_tokens": getattr(raw, "output_tokens", 0) or 0,
             }
+
+        if usage_data:
+            usage.record(
+                self.conn,
+                self.user_id,
+                usage.KIND_CHAT,
+                self.model,
+                usage_data["input_tokens"],
+                usage_data["output_tokens"],
+            )
 
         return Answer(
             text=text,
@@ -343,7 +365,7 @@ class NoteChat:
             # is not is worse than no citation at all.
             invented_note_ids=[nid for nid in cited if nid not in offered],
             refused=_looks_like_refusal(text),
-            usage=usage,
+            usage=usage_data,
         )
 
 

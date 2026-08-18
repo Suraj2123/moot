@@ -119,7 +119,13 @@ def make_chat(notes_corpus, provider, config):
         retriever = Retriever(
             notes_corpus["conn"], provider, config, notes_corpus["user_id"]
         )
-        return NoteChat(notes_corpus["conn"], retriever, client=client), client
+        return (
+            NoteChat(
+                notes_corpus["conn"], retriever,
+                user_id=notes_corpus["user_id"], client=client,
+            ),
+            client,
+        )
 
     return _make
 
@@ -221,7 +227,8 @@ def test_a_note_cannot_close_its_own_tag(conn, provider, config, user_id):
     Indexer(conn, provider, config, user_id).reindex()
 
     client = FakeClient()
-    bot = NoteChat(conn, Retriever(conn, provider, config, user_id), client=client)
+    bot = NoteChat(conn, Retriever(conn, provider, config, user_id),
+                   user_id=user_id, client=client)
     bot.ask("gradient descent")
 
     content = client.recorder["kwargs"]["messages"][-1]["content"]
@@ -317,7 +324,8 @@ def test_chat_only_ever_sees_the_asking_user_s_notes(conn, provider, config):
     Indexer(conn, provider, config, bob).reindex()
 
     client = FakeClient()
-    bot = NoteChat(conn, Retriever(conn, provider, config, alice), client=client)
+    bot = NoteChat(conn, Retriever(conn, provider, config, alice),
+                   user_id=alice, client=client)
     bot.ask("gradient descent")
 
     content = client.recorder["kwargs"]["messages"][-1]["content"]
@@ -386,3 +394,73 @@ def test_expansion_uses_only_recent_user_turns():
 def test_expansion_with_no_history_is_a_no_op():
     assert chat.expand_query("and that?", None) == "and that?"
     assert chat.expand_query("and that?", []) == "and that?"
+
+
+# ------------------------------------------------------------ cost and budget
+
+
+def test_an_answered_question_is_recorded_in_the_ledger(make_chat, notes_corpus):
+    from studylink import usage
+
+    bot, _ = make_chat()
+    bot.ask("How does gradient descent work?")
+
+    spend = usage.spend_since(notes_corpus["conn"], notes_corpus["user_id"])
+    assert spend.calls == 1
+    assert spend.micros > 0
+
+
+def test_a_refusal_costs_nothing(make_chat, notes_corpus):
+    """No call was made, so nothing may be charged for it."""
+    from studylink import usage
+
+    bot, _ = make_chat()
+    bot.ask("What is the melting point of tungsten?")
+
+    assert usage.spend_since(notes_corpus["conn"], notes_corpus["user_id"]).calls == 0
+
+
+def test_an_exhausted_budget_blocks_the_call(make_chat, notes_corpus, monkeypatch):
+    from studylink import usage
+
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "0.000001")
+    usage.record(
+        notes_corpus["conn"], notes_corpus["user_id"],
+        usage.KIND_CHAT, "claude-opus-5", 1_000_000, 1_000_000,
+    )
+
+    bot, client = make_chat()
+    with pytest.raises(usage.BudgetExceeded):
+        bot.ask("How does gradient descent work?")
+
+    assert client.recorder.get("calls", 0) == 0, "the model was called anyway"
+
+
+def test_the_budget_is_checked_after_retrieval_not_before(make_chat, notes_corpus, monkeypatch):
+    """A question with no matching notes should refuse rather than report a
+    budget problem -- it was never going to cost anything."""
+    from studylink import usage
+
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "0.000001")
+    usage.record(
+        notes_corpus["conn"], notes_corpus["user_id"],
+        usage.KIND_CHAT, "claude-opus-5", 1_000_000, 1_000_000,
+    )
+
+    bot, _ = make_chat()
+    answer = bot.ask("What is the melting point of tungsten?")
+    assert answer.refused is True
+
+
+def test_streaming_is_budgeted_too(make_chat, notes_corpus, monkeypatch):
+    from studylink import usage
+
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "0.000001")
+    usage.record(
+        notes_corpus["conn"], notes_corpus["user_id"],
+        usage.KIND_CHAT, "claude-opus-5", 1_000_000, 1_000_000,
+    )
+
+    bot, _ = make_chat()
+    with pytest.raises(usage.BudgetExceeded):
+        list(bot.stream("How does gradient descent work?"))

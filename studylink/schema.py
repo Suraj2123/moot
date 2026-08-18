@@ -163,6 +163,33 @@ jobs = Table(
 Index("ix_jobs_status_created", jobs.c.status, jobs.c.created_at)
 
 
+# One row per model call. The queries that matter are "what has this user spent
+# this month" and "what did that conversation cost", so it is a ledger rather
+# than a running total on `users` -- a counter cannot answer either question and
+# cannot be recomputed when it drifts.
+llm_usage = Table(
+    "llm_usage",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("kind", String(32), nullable=False),
+    Column("model", String(128), nullable=False),
+    Column("input_tokens", Integer, nullable=False, default=0),
+    Column("output_tokens", Integer, nullable=False, default=0),
+    # Stored in micro-dollars as an integer. Money in a float is how totals stop
+    # adding up, and per-call costs are far below a cent.
+    Column("cost_micros", Integer, nullable=False, default=0),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_llm_usage_user_created", llm_usage.c.user_id, llm_usage.c.created_at)
+
+
 courses = Table(
     "courses",
     metadata,
