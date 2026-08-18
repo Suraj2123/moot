@@ -101,7 +101,10 @@ def test_logout_is_always_ok(client):
 # individually.
 PUBLIC_PATHS = {"/auth/signup", "/auth/login", "/auth/logout",
                 "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect",
-                "/", "/app/{path:path}"}
+                "/", "/app/{path:path}",
+                # Probes. A load balancer has no credentials, and these report
+                # only whether dependencies answer -- never anything about data.
+                "/healthz", "/readyz"}
 
 
 def concrete(path: str) -> str:

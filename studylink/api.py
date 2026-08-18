@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from sqlalchemy import text
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 from . import auth as auth_module
 from . import credentials
 from . import jobs as jobs_module
+from . import preflight
 from . import usage as usage_module
 from . import ratelimit
 from . import sessions as sessions_module
@@ -42,6 +44,11 @@ from .db import create_all, make_engine
 from .pgvector_support import apply_search_tuning
 from . import store
 from .service import StudyLink
+
+# Checked at import, so a misconfigured deployment fails at boot -- where the
+# platform surfaces it -- rather than on the first request that needs the
+# missing piece. Fatal in production, advisory in development.
+preflight.run()
 
 api = FastAPI(title="StudyLink", version="0.1.0")
 
@@ -429,6 +436,75 @@ def spa(path: str):
             return FileResponse(candidate)
 
     return FileResponse(index)
+
+
+@api.get("/healthz", include_in_schema=False)
+def healthz() -> dict:
+    """Liveness: is this process running at all.
+
+    Deliberately touches nothing. A liveness probe that queries the database
+    restarts a healthy web process every time the database hiccups, which turns
+    a brief outage into a restart loop.
+    """
+    return {"ok": True}
+
+
+@api.get("/readyz", include_in_schema=False)
+def readyz():
+    """Readiness: can this process actually serve traffic.
+
+    Unauthenticated on purpose -- a load balancer has no credentials -- and it
+    reports only whether dependencies answer, never anything about the data.
+
+    It opens its own connection rather than taking the usual dependency. A
+    dependency that raises fails the request before the handler runs, so an
+    unreachable database produced a 500 traceback instead of the 503 a load
+    balancer is looking for. Reporting unhealthy is the entire job, so this
+    endpoint cannot be allowed to crash on the thing it is reporting about.
+    """
+    checks: dict[str, object] = {}
+    healthy = True
+
+    try:
+        with engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+            checks["database"] = "ok"
+            checks["migrations"] = "applied" if _migrations_applied(conn) else "pending"
+            if checks["migrations"] == "pending":
+                healthy = False
+    except Exception as exc:  # noqa: BLE001 - the point is to report, not raise
+        logger.warning("readiness check failed: %s", exc)
+        checks["database"] = f"error: {type(exc).__name__}"
+        checks.setdefault("migrations", "unknown")
+        healthy = False
+
+    checks["static"] = "built" if (STATIC_DIR / "index.html").exists() else "missing"
+
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"ok": healthy, **checks},
+    )
+
+
+def _migrations_applied(conn) -> bool:
+    """Whether the database is at the migration revision this code expects.
+
+    Serving traffic against a half-migrated database produces errors that look
+    like application bugs, so it is better to fail readiness and let the
+    platform hold traffic until the release finishes.
+    """
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+        head = ScriptDirectory.from_config(config).get_current_head()
+        return current == head
+    except Exception:
+        # No alembic_version table means create_all built the schema, which is
+        # the normal local path and not a reason to fail readiness.
+        return True
 
 
 @api.get("/health")
