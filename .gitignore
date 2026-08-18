@@ -26,6 +26,7 @@ venv/
 alembic/versions/__pycache__/
 
 # Frontend
+node_modules/
 web/node_modules/
 web/dist/
 .secret_key
