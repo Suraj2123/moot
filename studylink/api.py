@@ -10,12 +10,13 @@ lines over `StudyLink`.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 from . import auth as auth_module
 from . import credentials
 from . import jobs as jobs_module
+from . import usage as usage_module
 from . import ratelimit
 from . import sessions as sessions_module
 from .agent import AgentUnavailable, citation_coverage
@@ -165,6 +167,11 @@ class SignupIn(BaseModel):
 class LoginIn(BaseModel):
     email: str
     password: str
+
+
+class AskIn(BaseModel):
+    question: str
+    history: list[dict] = Field(default_factory=list)
 
 
 class CanvasConnectIn(BaseModel):
@@ -482,6 +489,88 @@ def search(
     q: str, top_k: int = 5, app: StudyLink = Depends(current_app)
 ) -> list[dict]:
     return [m.as_dict() for m in app.search_notes(q, top_k=top_k)]
+
+
+def _chat_for(app: StudyLink):
+    from .chat import NoteChat
+
+    return NoteChat(app.conn, app.retriever, user_id=app.user_id)
+
+
+@api.post("/ask")
+def ask(payload: AskIn, app: StudyLink = Depends(current_app)) -> dict:
+    """Answer a question from this account's notes.
+
+    Returns the answer together with its sources and a `grounded` flag. A client
+    that renders the text and ignores `grounded` is choosing to show citations
+    it has not checked -- the flag exists so that is a decision rather than an
+    oversight.
+    """
+    try:
+        answer = _chat_for(app).ask(payload.question, history=payload.history)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except usage_module.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return answer.as_dict()
+
+
+@api.post("/ask/stream")
+def ask_stream(payload: AskIn, app: StudyLink = Depends(current_app)):
+    """The same answer, streamed as server-sent events.
+
+    A grounded reply over six notes takes several seconds, and a chat box that
+    shows nothing for that long reads as broken.
+
+    The budget and the question are validated before the response starts. Once
+    an SSE stream is open the status code is already 200, so an error after that
+    point can only be an event in the body -- which a naive client will happily
+    render as if it were an answer. Everything that can be checked up front is.
+    """
+    try:
+        chat_bot = _chat_for(app)
+        if not (payload.question or "").strip():
+            raise ValueError("A question is required.")
+        usage_module.check_budget(app.conn, app.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except usage_module.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+    def events():
+        try:
+            for event in chat_bot.stream(payload.question, history=payload.history):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - the stream is already open
+            logger.exception("chat stream failed")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            # Nginx buffers proxied responses by default, which holds the whole
+            # stream until it finishes and turns streaming back into waiting.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@api.get("/usage")
+def usage_summary(app: StudyLink = Depends(current_app)) -> dict:
+    """What this account has spent on AI, and what is left."""
+    spend = usage_module.spend_since(app.conn, app.user_id)
+    limit = usage_module.budget_micros()
+    return {
+        **spend.as_dict(),
+        "budget_usd": round(limit / 1_000_000, 6) if limit else None,
+        "remaining_usd": round(
+            usage_module.remaining_micros(app.conn, app.user_id) / 1_000_000, 6
+        ) if limit else None,
+    }
 
 
 @api.get("/canvas")
