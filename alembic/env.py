@@ -34,7 +34,15 @@ DEFAULT_URL = "sqlite:///data/studylink.db"
 
 
 def get_url() -> str:
-    return os.environ.get("DATABASE_URL", DEFAULT_URL)
+    url = os.environ.get("DATABASE_URL", DEFAULT_URL).strip()
+    # Match studylink.config._normalize_database_url: hosts hand out
+    # `postgres://`, SQLAlchemy needs `postgresql+psycopg2://`, and migrations
+    # have to load through the same accepted set as the app itself.
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
 
 
 def run_migrations_offline() -> None:

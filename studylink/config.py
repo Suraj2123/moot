@@ -98,6 +98,25 @@ class Settings:
         return bool(self.anthropic_api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
+def _normalize_database_url(url: str) -> str:
+    """Accept the bare `postgres://` scheme that most hosts hand out.
+
+    Railway, Heroku, and Render all export DATABASE_URL as `postgres://...`,
+    but SQLAlchemy 2.x removed the `postgres` dialect alias in favour of
+    `postgresql`, and drops the `psycopg2` driver unless it is named. Doing the
+    substitution here means the platform's default variable reference works
+    unedited, instead of failing at engine construction with a driver error.
+    """
+    url = url.strip()
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+
 def _default_embedding_provider() -> str:
     explicit = os.environ.get("EMBEDDING_PROVIDER", "").strip()
     if explicit:
@@ -124,7 +143,7 @@ def load_settings() -> Settings:
 
     return Settings(
         db_path=Path(os.environ.get("STUDYLINK_DB", str(DEFAULT_DB_PATH))),
-        database_url=os.environ.get("DATABASE_URL", ""),
+        database_url=_normalize_database_url(os.environ.get("DATABASE_URL", "")),
         labels_path=Path(os.environ.get("STUDYLINK_LABELS", str(DEFAULT_LABELS_PATH))),
         canvas_api_url=os.environ.get("CANVAS_API_URL", "").rstrip("/"),
         canvas_api_token=os.environ.get("CANVAS_API_TOKEN", ""),
