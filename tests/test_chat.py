@@ -323,3 +323,66 @@ def test_chat_only_ever_sees_the_asking_user_s_notes(conn, provider, config):
     content = client.recorder["kwargs"]["messages"][-1]["content"]
     assert "ALICE-SECRET-TOKEN" in content
     assert "BOB-SECRET-TOKEN" not in content
+
+
+# ------------------------------------------------------- follow-up retrieval
+
+
+def test_a_bare_follow_up_retrieves_nothing_on_its_own(make_chat):
+    """The problem being solved, asserted directly so the fix has a baseline."""
+    bot, _ = make_chat()
+    assert bot.retrieve("and what about alpha?") == []
+
+
+def test_a_bare_follow_up_retrieves_with_conversation_context(make_chat):
+    bot, client = make_chat()
+    history = [
+        {"role": "user", "content": "How does gradient descent work?"},
+        {"role": "assistant", "content": "It steps downhill [N1]."},
+    ]
+
+    matches = bot.retrieve("and what about alpha?", history)
+    assert matches, "the follow-up still retrieved nothing"
+
+
+def test_expansion_only_affects_retrieval_not_the_prompt(make_chat):
+    """What the model is asked must stay exactly what the student typed."""
+    bot, client = make_chat()
+    history = [{"role": "user", "content": "How does gradient descent work?"}]
+
+    bot.ask("and what about alpha?", history=history)
+
+    sent = client.recorder["kwargs"]["messages"][-1]["content"]
+    assert "Question: and what about alpha?" in sent
+
+
+def test_a_long_standalone_question_is_not_expanded(chat_module=chat):
+    """Above the follow-up length a question retrieves fine alone, and mixing
+    history in only drags the search back toward the opening topic."""
+    long_question = (
+        "Explain in detail how the learning rate alpha influences convergence "
+        "in gradient descent and what happens when it is set too large"
+    )
+    history = [{"role": "user", "content": "tell me about the alliance system"}]
+
+    assert chat_module.expand_query(long_question, history) == long_question
+
+
+def test_expansion_uses_only_recent_user_turns():
+    history = [
+        {"role": "user", "content": "OLDEST"},
+        {"role": "assistant", "content": "ASSISTANT-REPLY"},
+        {"role": "user", "content": "MIDDLE"},
+        {"role": "assistant", "content": "ASSISTANT-REPLY-2"},
+        {"role": "user", "content": "NEWEST"},
+    ]
+    expanded = chat.expand_query("and that?", history)
+
+    assert "NEWEST" in expanded and "MIDDLE" in expanded
+    assert "OLDEST" not in expanded, "a long conversation should not drag every search back"
+    assert "ASSISTANT-REPLY" not in expanded
+
+
+def test_expansion_with_no_history_is_a_no_op():
+    assert chat.expand_query("and that?", None) == "and that?"
+    assert chat.expand_query("and that?", []) == "and that?"

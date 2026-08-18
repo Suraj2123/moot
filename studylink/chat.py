@@ -116,6 +116,46 @@ class Answer:
         }
 
 
+# How many earlier turns to fold into the retrieval query. Two is enough to
+# resolve "it" and "that" without letting a long conversation drag every search
+# back toward whatever it opened with.
+HISTORY_TURNS_FOR_RETRIEVAL = 2
+
+# A follow-up is short and full of pronouns; a standalone question is not. Above
+# this length, the question retrieves fine on its own and mixing history in only
+# adds noise.
+FOLLOW_UP_MAX_CHARS = 120
+
+
+def expand_query(question: str, history: Optional[list[dict]] = None) -> str:
+    """Widen a short follow-up with recent conversation, for retrieval only.
+
+    Deliberately lexical rather than a model call to rewrite the query. A rewrite
+    would be better, and it would also put a second LLM round-trip in front of
+    every message -- doubling latency and cost on the turn a user is already
+    waiting on. Concatenating recent user turns is cheap, has no failure mode,
+    and fixes the case that actually breaks: the short pronoun-laden follow-up.
+
+    Only the retrieval query is expanded. What the model is asked stays exactly
+    what the student typed.
+    """
+    question = (question or "").strip()
+    if not history or len(question) > FOLLOW_UP_MAX_CHARS:
+        return question
+
+    earlier = [
+        turn.get("content", "")
+        for turn in history
+        if turn.get("role") == "user" and turn.get("content")
+    ][-HISTORY_TURNS_FOR_RETRIEVAL:]
+
+    if not earlier:
+        return question
+    # Question last so its terms are present; earlier turns supply the subject
+    # the pronouns refer to.
+    return " ".join(earlier + [question])[:MAX_QUESTION_CHARS]
+
+
 def build_context(matches: list[NoteMatch]) -> str:
     """Render retrieved notes as delimited, labelled blocks.
 
@@ -169,10 +209,18 @@ class NoteChat:
                 ) from exc
         return self._client
 
-    def retrieve(self, question: str) -> list[NoteMatch]:
-        """Notes worth putting in front of the model, best first."""
+    def retrieve(self, question: str, history: Optional[list[dict]] = None) -> list[NoteMatch]:
+        """Notes worth putting in front of the model, best first.
+
+        The search text is the question expanded with recent conversation, not
+        the question alone. "And what about alpha?" is a perfectly clear
+        follow-up to a human and retrieves nothing on its own, because the
+        retriever never sees what it is a follow-up to -- so the chat's second
+        turn silently becomes worse than its first.
+        """
         matches = self.retriever.search_notes(
-            question, top_k=MAX_CONTEXT_NOTES, apply_threshold=False
+            expand_query(question, history), top_k=MAX_CONTEXT_NOTES,
+            apply_threshold=False,
         )
         return [m for m in matches if m.score >= MIN_SCORE][:MAX_CONTEXT_NOTES]
 
@@ -217,7 +265,7 @@ class NoteChat:
             raise ValueError("A question is required.")
         question = question[:MAX_QUESTION_CHARS]
 
-        matches = self.retrieve(question)
+        matches = self.retrieve(question, history)
         if not matches:
             # Layer one: no retrieval, no call. Cheaper, and a call that never
             # happens cannot invent an answer.
@@ -249,7 +297,7 @@ class NoteChat:
             raise ValueError("A question is required.")
         question = question[:MAX_QUESTION_CHARS]
 
-        matches = self.retrieve(question)
+        matches = self.retrieve(question, history)
         if not matches:
             yield {"type": "text", "text": REFUSAL}
             yield {"type": "done", "answer": Answer(text=REFUSAL, refused=True).as_dict()}
