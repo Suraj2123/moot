@@ -1,0 +1,42 @@
+# Anything in here is not sent to the Docker daemon as build context.
+# The build gets faster, and no secret sitting in the working tree can
+# accidentally end up in an image layer.
+
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Local artefacts and data -- never bake them into an image.
+.env
+.env.*
+.secret_key
+data/
+!data/eval/
+*.db
+*.db-journal
+*.sqlite
+
+# Frontend build inputs and outputs. The build stage installs into its own
+# node_modules; the runtime copies the compiled bundle out of the build
+# stage, not from the working tree.
+web/node_modules
+web/dist
+studylink/static
+
+# Editor / OS noise.
+.vscode
+.idea
+.DS_Store
+
+# CI / docs -- not needed at runtime.
+.github
+docs/
+*.md
+!README.md
