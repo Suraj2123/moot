@@ -28,3 +28,4 @@ alembic/versions/__pycache__/
 # Frontend
 web/node_modules/
 web/dist/
+.secret_key

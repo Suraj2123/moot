@@ -21,10 +21,16 @@ any machine.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env          # optional: add Canvas / Anthropic / Voyage keys
-python scripts/seed_demo.py   # 2 courses, 5 assignments, 12 notes, 20 labelled pairs
-streamlit run app.py
+cp .env.example .env      # optional: add Canvas / Anthropic / Voyage keys
+./run.sh --seed           # seeds a demo account, builds the web app, starts everything
 ```
+
+Then open **http://127.0.0.1:8000** and sign in as `demo@school.edu` /
+`correct horse battery`.
+
+`run.sh` starts two things: the API, which also serves the web app, and the
+background worker that does indexing and Canvas sync. Without the worker, notes
+save but never become searchable.
 
 Measure retrieval quality:
 
@@ -128,7 +134,7 @@ service           the facade the UI, API, and scripts all drive
 | Agent | Anthropic Messages API, hand-written tool loop | The tool closes over a per-request retriever; a global would be worse than 30 lines of loop |
 | Auth | Opaque server-side session tokens | Revocation is a feature here, and a JWT cannot be revoked without the database lookup it was avoiding |
 | Storage | SQLite or Postgres | One schema, both engines; SQLite for local work, Postgres to host it |
-| Frontend | Streamlit | Function over polish for v1; the API is the surface a web frontend uses |
+| Frontend | React + Vite, served by the API | One process and one origin, so there is no CORS in production. Streamlit remains for local analysis |
 
 ## Configuration
 
