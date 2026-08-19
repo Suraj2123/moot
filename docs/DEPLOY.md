@@ -1,4 +1,4 @@
-# Deploying StudyLink
+# Deploying moot
 
 ## What has to run
 
@@ -135,6 +135,46 @@ is one service per process, sharing the same repo, so you create two:
 
 The `release` command in `Procfile` handles migrations if you use
 Railway's nixpacks builder instead of the Dockerfile.
+
+## Render
+
+Render builds the `Dockerfile` directly. Three things about it differ from
+the other two platforms enough to be worth stating.
+
+**The health check must point at `/healthz`.** Render defaults to `/`, and
+`/` here redirects to `/app/`. A 307 is not a 2xx, so the check fails, and
+a failing check means Render will not route traffic to a container that is
+in fact serving fine. The symptom is a working app behind a "Not Found"
+page. Set **Settings → Health Check Path** to `/healthz`.
+
+**There is no release phase below the paid tier**, so migrations cannot run
+between build and boot. That is why `docker-entrypoint.sh` runs
+`scripts/migrate.py` before handing off to the real process: whichever
+container starts first takes a Postgres advisory lock and migrates, the
+rest wait and then carry on. Without it, the schema never gets created and
+the first signup returns 500 from a missing `users` table.
+
+**The worker is a separate paid service.** Render's free tier has web
+services only; a Background Worker is the cheapest paid tier. Skip it and
+everything still runs, but notes save without ever becoming searchable —
+which reads as a bug rather than a missing process.
+
+Setup:
+
+1. **New → Postgres.** Copy the *Internal Database URL* — it is
+   `postgres://…`, which the app rewrites to the driver form on load.
+2. **New → Web Service**, point it at the repo, Runtime **Docker**.
+3. Environment: `DATABASE_URL` (the internal URL), `STUDYLINK_SECRET_KEY`,
+   `STUDYLINK_ENV=production`, optionally `ANTHROPIC_API_KEY`.
+4. **Health Check Path:** `/healthz`.
+5. Connect with `psql` using the *External* URL and run
+   `CREATE EXTENSION IF NOT EXISTS vector;`.
+6. Optional: **New → Background Worker**, same repo, start command
+   `python scripts/run_worker.py`, same environment.
+
+Two free-tier behaviours to expect: web services sleep after about 15
+minutes idle and take roughly a minute to answer the next request, and
+free Postgres instances expire after 30 days.
 
 ## Local containers (docker-compose)
 

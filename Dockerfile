@@ -49,11 +49,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # looks.
 COPY --chown=app:app . ./
 COPY --from=web --chown=app:app /out/static ./studylink/static
+RUN chmod +x docker-entrypoint.sh
 
 USER app
 
-# Alembic runs on start via the entrypoint, not baked into the image, so one
-# image serves every environment.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
@@ -61,14 +60,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8000
 
+# The entrypoint migrates, then execs the command. Platforms that offer a
+# release phase can set SKIP_MIGRATIONS=1 and run scripts/migrate.py there
+# instead; platforms that do not (Render's free Docker tier) get correct
+# behaviour without one. Concurrent containers are serialised by an advisory
+# lock inside the script, so the web process and the worker can both run it.
+ENTRYPOINT ["./docker-entrypoint.sh"]
+
 # The command is set by the platform (web vs worker) via docker-compose, fly,
 # or railway config -- the image itself just knows how to run either.
 #
 # Web:    uvicorn studylink.api:api --host 0.0.0.0 --port $PORT
 # Worker: python scripts/run_worker.py
-#
-# Migrations are run once at release time, not on every container boot, so
-# two web replicas do not race to migrate.
 CMD ["sh", "-c", "uvicorn studylink.api:api --host 0.0.0.0 --port ${PORT:-8000}"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
