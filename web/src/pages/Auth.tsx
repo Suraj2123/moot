@@ -33,7 +33,7 @@ export function AuthPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
     <div className="auth-page">
       <div className="auth-card">
         <div className="brand">
-          <span className="brand-mark">S</span> StudyLink
+          <span className="brand-mark">m</span> moot
         </div>
 
         <div className="card">

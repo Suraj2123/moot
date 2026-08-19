@@ -63,7 +63,7 @@ export function App() {
 
       <nav className={`sidebar${menuOpen ? " open" : ""}`}>
         <div className="brand">
-          <span className="brand-mark">S</span> StudyLink
+          <span className="brand-mark">m</span> moot
         </div>
 
         {TABS.map(({ id, label, icon: Icon }) => (

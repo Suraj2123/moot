@@ -1,6 +1,6 @@
 # Authentication: what it defends against, and what it does not
 
-StudyLink went from one hardcoded local user to real accounts on the web. This
+moot went from one hardcoded local user to real accounts on the web. This
 is the record of how, and — more usefully — of where the edges are.
 
 ## The shape of it

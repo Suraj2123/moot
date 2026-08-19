@@ -1,4 +1,4 @@
-# StudyLink
+# moot
 
 A notes app that connects to Canvas, automatically maps your notes and lecture
 material to the assignments they're relevant to, and turns matched notes into a
@@ -8,7 +8,7 @@ manual searching.
 ## Why
 
 Notes end up scattered across a semester — different courses, different formats,
-no link back to the assignment they actually apply to. StudyLink closes that gap:
+no link back to the assignment they actually apply to. moot closes that gap:
 pull assignments from Canvas, embed your notes, semantically match them, **measure
 how good the matching actually is**, and use an agent to synthesise matched notes
 plus assignment context into something you can start working from.

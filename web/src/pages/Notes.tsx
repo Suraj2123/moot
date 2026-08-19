@@ -67,7 +67,7 @@ export function NotesPage() {
         <Empty title={search ? "No notes match that" : "No notes yet"}>
           {search
             ? "Try a different word, or clear the search."
-            : "Add your first note and StudyLink will match it to your assignments."}
+            : "Add your first note and moot will match it to your assignments."}
         </Empty>
       ) : (
         <div className="stack">

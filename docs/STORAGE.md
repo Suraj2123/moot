@@ -1,6 +1,6 @@
 # Storage and search: when exact search stops being good enough
 
-StudyLink searches notes by comparing embeddings. There are two implementations
+moot searches notes by comparing embeddings. There are two implementations
 of that comparison and one meaning. This is the record of which is running,
 why, and what would have to change to move to the next one.
 

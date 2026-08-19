@@ -1,6 +1,6 @@
 # The multi-user data model
 
-StudyLink started as a single-user app: one SQLite file, one person, no notion of
+moot started as a single-user app: one SQLite file, one person, no notion of
 ownership. Hosting it changes that — the phone talks to a shared server, and the
 worst possible bug in a study app is showing one student another student's notes.
 

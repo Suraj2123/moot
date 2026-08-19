@@ -50,7 +50,7 @@ from .service import StudyLink
 # missing piece. Fatal in production, advisory in development.
 preflight.run()
 
-api = FastAPI(title="StudyLink", version="0.1.0")
+api = FastAPI(title="moot", version="0.1.0")
 
 # The engine is process-wide and its pool is shared; connections are not. Each
 # request checks one out and returns it, which is what lets `app.user` be a
