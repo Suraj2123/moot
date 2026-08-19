@@ -166,13 +166,17 @@ services only; a Background Worker is the cheapest paid tier. Skip it and
 everything still runs, but sync and indexing queue up and never execute —
 which reads as a bug rather than a missing process.
 
-If you cannot add the second service yet, set `RUN_WORKER=1` on the web
-service and the entrypoint drains the queue from inside the web container.
-Two consequences worth accepting deliberately: background work competes
-with request handling for the same CPU, so a large Canvas sync slows the
-site while it runs; and a free web service that sleeps when idle takes its
+You do not have to do anything for this to work: the image defaults
+`RUN_WORKER=1`, so a single web container drains its own queue. Two
+consequences worth accepting deliberately — background work competes with
+request handling for the same CPU, so a large Canvas sync slows the site
+while it runs; and a free web service that sleeps when idle takes its
 worker with it, so jobs progress while someone is using the app rather
 than on a schedule. Fine for a demo, not for real load.
+
+When you do add a Background Worker service, set `RUN_WORKER=0` on the web
+service so only one process is draining the queue. (`fly.toml` and
+`docker-compose.yml` already do this, since both define a real worker.)
 
 Setup:
 

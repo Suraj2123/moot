@@ -77,6 +77,9 @@ primary_region = "iad"
   # Structured logs and never-cached templates are the sane defaults.
   PYTHONUNBUFFERED = "1"
   PYTHONDONTWRITEBYTECODE = "1"
+  # There is a dedicated worker process below, so the image default of
+  # running one inside the web container is turned off here.
+  RUN_WORKER = "0"
 
 # Web is small; the worker only needs enough memory to embed a batch. Bump
 # `worker` if you switch to sentence-transformers, which pulls in torch.

@@ -59,6 +59,9 @@ services:
       # missing keys don't block boot on a dev machine.
       STUDYLINK_ENV: development
       PORT: "8000"
+      # There is a real worker service below, so the web container must
+      # not start one of its own.
+      RUN_WORKER: "0"
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -79,6 +82,8 @@ services:
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
       STUDYLINK_ENV: development
+      # This container *is* the worker; the entrypoint must not add a second.
+      RUN_WORKER: "0"
     command: ["python", "scripts/run_worker.py"]
 
 volumes:

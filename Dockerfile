@@ -53,9 +53,15 @@ RUN chmod +x docker-entrypoint.sh
 
 USER app
 
+# RUN_WORKER defaults on so a single-container deploy works with no further
+# configuration. The separate-worker setup is better and every platform config
+# in this repo still uses it -- they set RUN_WORKER=0 on the web service. The
+# default is chosen for the deploy that has nothing configured yet, because
+# that is the one where a silently-empty job queue is hardest to diagnose.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
+    RUN_WORKER=1 \
     STUDYLINK_ENV=production
 
 EXPOSE 8000
