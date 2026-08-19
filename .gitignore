@@ -29,4 +29,10 @@ alembic/versions/__pycache__/
 node_modules/
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
+
+# Build output. The Dockerfile builds it in its own stage, run.sh builds it
+# if missing, and the filenames are content-hashed -- so tracking it meant
+# every one-line style change shipped two minified blobs and a rename.
+studylink/static/
 .secret_key
