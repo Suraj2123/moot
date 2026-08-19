@@ -15,7 +15,9 @@ from studylink import preflight
 GOOD = {
     "STUDYLINK_ENV": "production",
     "DATABASE_URL": "postgresql+psycopg2://user:pw@db/studylink",
-    "STUDYLINK_SECRET_KEY": "v1:c29tZS1yZWFsLTMyLWJ5dGUta2V5LWhlcmUtb2s=",
+    # Has to decode to exactly 32 bytes on the standard alphabet -- the
+    # placeholder that was here before was 29 and the key check now says so.
+    "STUDYLINK_SECRET_KEY": "v1:YS1yZWFsLXRoaXJ0eS10d28tYnl0ZS1rZXktaGVyZSE=",
     "ANTHROPIC_API_KEY": "sk-ant-whatever",
     "TRUST_PROXY_HEADERS": "1",
 }
@@ -65,6 +67,38 @@ def test_the_public_ci_key_is_rejected_even_in_development():
         })
         assert not findings.ok, env
         assert any("public" in e for e in findings.errors)
+
+
+@pytest.mark.parametrize(
+    "key, why",
+    [
+        # The url-safe alphabet plus stripped padding. This is what a plausible
+        # one-liner off the internet produces, it looks entirely correct, and
+        # the standard-alphabet decoder rejects it.
+        ("v1:tK0qpRXO9nUjWfPmSmU61l_hZhUefI8_LJ2o626kjn0", "url-safe, unpadded"),
+        ("v1:not!base64!at!all", "not base64"),
+        ("v1:c2hvcnQ=", "decodes to too few bytes"),
+        ("no-version-prefix", "missing the v1: prefix"),
+    ],
+)
+def test_a_malformed_secret_key_is_an_error(key, why):
+    """Present is not the same as usable.
+
+    A key with the wrong encoding parses fine as a string and fails only when
+    someone connects Canvas -- hours after the deploy, as a 500. Catching it at
+    boot turns a mystery into a sentence.
+    """
+    findings = preflight.check({**GOOD, "STUDYLINK_SECRET_KEY": key})
+    assert not findings.ok, why
+    assert any("SECRET_KEY" in e for e in findings.errors)
+
+
+def test_the_key_the_app_generates_is_accepted():
+    """The check and the generator have to agree, or one of them is wrong."""
+    from studylink.vault import generate_key
+
+    findings = preflight.check({**GOOD, "STUDYLINK_SECRET_KEY": generate_key()})
+    assert findings.ok, findings.report()
 
 
 def test_wildcard_cors_is_an_error():

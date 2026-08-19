@@ -49,6 +49,13 @@ platform:
 python -c 'from studylink.vault import generate_key; print(generate_key())'
 ```
 
+Use that command rather than an equivalent-looking one-liner. The
+encoding is **standard base64 with padding**, so a real key ends in `=`.
+The obvious alternative — `base64.urlsafe_b64encode(...).rstrip("=")` —
+produces a string that looks identical at a glance and is rejected by the
+decoder. Preflight now refuses to boot on a key it cannot parse, which is
+the cheapest place to find out.
+
 Losing this key strands every Canvas token in the database — they are
 still there but cannot be decrypted. See `docs/SECRETS.md` for rotation.
 

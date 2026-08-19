@@ -92,6 +92,17 @@ def connect_canvas(
             "This server cannot store Canvas tokens: no encryption key is "
             "configured. Set STUDYLINK_SECRET_KEY."
         ) from exc
+    except vault.VaultError as exc:
+        # A key that is present but malformed -- wrong base64 alphabet,
+        # stripped padding, wrong length. Without this branch the failure
+        # reaches the user as a 500 and a stack trace, which reads as "the
+        # app is broken" rather than "this server is misconfigured". The
+        # message says which, and says nothing about the key itself.
+        raise CredentialError(
+            "This server cannot store Canvas tokens: its encryption key is "
+            "not usable. This is a server configuration problem, not "
+            "something you can fix from here."
+        ) from exc
 
     now = _now()
     with transaction(conn):

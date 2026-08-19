@@ -128,6 +128,24 @@ def test_connecting_without_an_encryption_key_fails_loudly(conn, alice, monkeypa
     assert conn.execute(canvas_credentials.select()).first() is None
 
 
+def test_connecting_with_a_malformed_key_is_a_stated_error_not_a_crash(
+    conn, alice, monkeypatch
+):
+    """A key that is present but unusable is a server problem, and the user has
+    to be told that rather than shown a 500.
+
+    The specific shape here is url-safe base64 with the padding stripped --
+    what a plausible key-generation one-liner produces. It looks right, and the
+    standard-alphabet decoder rejects it.
+    """
+    monkeypatch.setenv(vault.ENV_VAR, "v1:tK0qpRXO9nUjWfPmSmU61l_hZhUefI8_LJ2o626kjn0")
+
+    with pytest.raises(credentials.CredentialError, match="server configuration"):
+        credentials.connect_canvas(conn, alice, "https://canvas.edu", "secret-token")
+
+    assert conn.execute(canvas_credentials.select()).first() is None
+
+
 def test_an_undecryptable_token_raises_rather_than_looking_disconnected(
     conn, alice, monkeypatch
 ):

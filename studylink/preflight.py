@@ -86,6 +86,23 @@ def check(env: dict[str, str] | None = None) -> Findings:
             "It is public. Generate a real one: "
             "python -c 'from studylink.vault import generate_key; print(generate_key())'"
         )
+    else:
+        # Presence is not the same as usability. A key with the wrong base64
+        # alphabet, stripped padding, or the wrong length parses as a string
+        # and fails only when someone connects Canvas -- hours later, as a 500
+        # with a stack trace. Parsing it here turns that into a boot failure
+        # with a sentence explaining it.
+        from . import vault
+
+        try:
+            vault.load_keys(secret_key)
+        except vault.VaultError as exc:
+            findings.errors.append(
+                f"STUDYLINK_SECRET_KEY is set but unusable: {exc}. Note the "
+                "encoding is standard base64 with padding, not url-safe. "
+                "Generate one with: python -c 'from studylink.vault import "
+                "generate_key; print(generate_key())'"
+            )
 
     # --- the web front door ------------------------------------------------
     if production and env.get("CORS_ALLOW_ORIGINS", "").strip() == "*":
