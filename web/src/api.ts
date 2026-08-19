@@ -77,7 +77,43 @@ export const api = {
   post: <T>(path: string, body?: unknown) =>
     fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body ?? {}) }).then(handle<T>),
   del: <T>(path: string) => fetch(path, { method: "DELETE", headers: headers() }).then(handle<T>),
+
+  /**
+   * Multipart, so no Content-Type header of our own: the browser has to set
+   * it in order to append the multipart boundary. Setting it by hand here is
+   * the classic way to make every upload fail to parse server-side.
+   */
+  upload: <T>(path: string, form: FormData) => {
+    const auth: Record<string, string> = {};
+    if (token) auth.Authorization = `Bearer ${token}`;
+    return fetch(path, { method: "POST", headers: auth, body: form }).then(handle<T>);
+  },
 };
+
+/** What the server will accept, so the picker and the drop zone agree with it. */
+export const UPLOAD_ACCEPT = ".md,.markdown,.txt,.text,.pdf,.docx";
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+export interface UploadResult {
+  id: number;
+  job: Job;
+  kind: string;
+  chars: number;
+  /** Set when the file parsed but something is worth saying -- e.g. truncation. */
+  notice: string | null;
+}
+
+export function uploadNote(
+  file: File,
+  opts: { title?: string; courseId?: number | null; sourceType?: string } = {},
+) {
+  const form = new FormData();
+  form.append("file", file);
+  if (opts.title?.trim()) form.append("title", opts.title.trim());
+  if (opts.courseId != null) form.append("course_id", String(opts.courseId));
+  if (opts.sourceType) form.append("source_type", opts.sourceType);
+  return api.upload<UploadResult>("/notes/upload", form);
+}
 
 /* --------------------------------------------------------------- types */
 

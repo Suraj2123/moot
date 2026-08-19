@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
-import { notes, jobs, ApiError, type Job, type Note, type Match } from "../api";
+import { useEffect, useRef, useState } from "react";
+import {
+  notes, jobs, ApiError, uploadNote, UPLOAD_ACCEPT, UPLOAD_MAX_BYTES,
+  type Job, type Note, type Match,
+} from "../api";
 import { Alert, Empty, Skeleton, ConfidenceBadge, ScoreBar } from "../components/ui";
-import { IconPlus, IconSearch } from "../components/Icons";
+import { IconPlus, IconSearch, IconUpload } from "../components/Icons";
 
 export function NotesPage() {
   const [items, setItems] = useState<Note[] | null>(null);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
 
   async function load(term = search) {
@@ -34,12 +38,21 @@ export function NotesPage() {
           <h1>Notes</h1>
           <p>Everything you have written, and what each note is relevant to.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setComposing((v) => !v)}>
-          <IconPlus /> New note
-        </button>
+        <div className="row">
+          <button className="btn btn-ghost" onClick={() => setUploading((v) => !v)}>
+            <IconUpload /> Upload
+          </button>
+          <button className="btn btn-primary" onClick={() => setComposing((v) => !v)}>
+            <IconPlus /> New note
+          </button>
+        </div>
       </div>
 
       {error ? <Alert>{error}</Alert> : null}
+
+      {uploading ? (
+        <Uploader onDone={() => load()} onCancel={() => setUploading(false)} />
+      ) : null}
 
       {composing ? (
         <NoteComposer
@@ -78,7 +91,10 @@ export function NotesPage() {
                   <div style={{ minWidth: 0 }}>
                     <h3>{note.title}</h3>
                     <div className="small faint">
-                      {note.course ?? "Unassigned"} · {note.chars.toLocaleString()} characters
+                      {/* `||`, not `??`: an unassigned note comes back with an
+                          empty course name rather than null, which `??` passes
+                          straight through and renders as a stray separator. */}
+                      {note.course || "Unassigned"} · {note.chars.toLocaleString()} characters
                       {note.source_type === "transcript" ? " · transcript" : ""}
                     </div>
                   </div>
@@ -90,6 +106,141 @@ export function NotesPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** One row per file, so a failure names the file it belongs to. */
+interface Upload {
+  file: File;
+  status: "pending" | "uploading" | "done" | "error";
+  message?: string;
+}
+
+function Uploader({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [rows, setRows] = useState<Upload[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  // Nested drag events fire on every child element, so a plain
+  // enter/leave pair flickers the highlight. Counting depth fixes it.
+  const depth = useRef(0);
+
+  function accept(list: FileList | null) {
+    if (!list?.length) return;
+    setRows((prev) => [
+      ...prev,
+      ...Array.from(list).map((file): Upload => {
+        // Checked here as well as on the server, because a 10 MB round trip
+        // to be told no is a poor way to learn the limit.
+        if (file.size > UPLOAD_MAX_BYTES) {
+          return {
+            file,
+            status: "error",
+            message: `${(file.size / 1048576).toFixed(1)} MB is over the 10 MB limit.`,
+          };
+        }
+        return { file, status: "pending" };
+      }),
+    ]);
+  }
+
+  async function send() {
+    setBusy(true);
+    // Sequential, not Promise.all: each upload queues an indexing job, and
+    // firing ten at once buries the worker for no gain on a corpus this size.
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].status !== "pending") continue;
+      setRows((prev) => prev.map((r, j) => (i === j ? { ...r, status: "uploading" } : r)));
+      try {
+        const result = await uploadNote(rows[i].file);
+        setRows((prev) => prev.map((r, j) => (i === j ? {
+          ...r,
+          status: "done",
+          message: result.notice ?? `${result.chars.toLocaleString()} characters`,
+        } : r)));
+        onDone();
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "Upload failed.";
+        setRows((prev) => prev.map((r, j) => (i === j ? { ...r, status: "error", message } : r)));
+      }
+    }
+    setBusy(false);
+  }
+
+  const pending = rows.filter((r) => r.status === "pending").length;
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div
+        className={`dropzone${dragging ? " dragging" : ""}`}
+        onDragEnter={(e) => { e.preventDefault(); depth.current += 1; setDragging(true); }}
+        onDragOver={(e) => e.preventDefault()}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          depth.current -= 1;
+          if (depth.current <= 0) { depth.current = 0; setDragging(false); }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          depth.current = 0;
+          setDragging(false);
+          accept(e.dataTransfer.files);
+        }}
+        onClick={() => input.current?.click()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") input.current?.click(); }}
+      >
+        <IconUpload />
+        <strong>Drop files here, or click to choose</strong>
+        <span className="small faint">PDF, Word, Markdown, or plain text · up to 10 MB each</span>
+        <input
+          ref={input}
+          type="file"
+          multiple
+          accept={UPLOAD_ACCEPT}
+          style={{ display: "none" }}
+          onChange={(e) => { accept(e.target.files); e.target.value = ""; }}
+        />
+      </div>
+
+      {rows.length > 0 ? (
+        <div className="stack" style={{ marginTop: 12 }}>
+          {rows.map((row, i) => (
+            <div className="upload-row" key={`${row.file.name}-${i}`}>
+              <div style={{ minWidth: 0 }}>
+                <div className="upload-name">{row.file.name}</div>
+                {row.message ? (
+                  <div className={`small ${row.status === "error" ? "danger" : "faint"}`}>
+                    {row.message}
+                  </div>
+                ) : null}
+              </div>
+              <span className={`badge${row.status === "done" ? " badge-accent" : ""}`}>
+                {row.status === "uploading" ? "Reading…"
+                  : row.status === "done" ? "Added"
+                  : row.status === "error" ? "Failed"
+                  : "Ready"}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="row" style={{ marginTop: 12 }}>
+        <button className="btn btn-primary" onClick={send} disabled={busy || pending === 0}>
+          {busy ? "Uploading…" : pending > 1 ? `Add ${pending} files` : "Add file"}
+        </button>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>Close</button>
+      </div>
+
+      {rows.some((r) => r.status === "done") ? (
+        <p className="small faint" style={{ marginTop: 10, marginBottom: 0 }}>
+          Indexing runs in the background — uploaded files become searchable shortly.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -201,4 +352,3 @@ export function JobsStrip() {
   if (!items.some((j) => j.status === "queued" || j.status === "running")) return null;
   return <span className="badge badge-accent">Indexing…</span>;
 }
-
