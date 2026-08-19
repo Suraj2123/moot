@@ -23,6 +23,14 @@ cffi>=1.16
 psycopg2-binary>=2.9
 pgvector>=0.2.5
 
+# Uploaded documents -> note text. pypdf is pure Python and handles the
+# text layer; there is deliberately no OCR dependency, so a scanned PDF is
+# refused with an explanation rather than guessed at. python-multipart is
+# what FastAPI needs to parse the upload itself.
+pypdf>=4.0
+python-docx>=1.1
+python-multipart>=0.0.9
+
 # Tests
 pytest>=8.0
 
