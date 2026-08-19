@@ -163,8 +163,16 @@ the first signup returns 500 from a missing `users` table.
 
 **The worker is a separate paid service.** Render's free tier has web
 services only; a Background Worker is the cheapest paid tier. Skip it and
-everything still runs, but notes save without ever becoming searchable —
+everything still runs, but sync and indexing queue up and never execute —
 which reads as a bug rather than a missing process.
+
+If you cannot add the second service yet, set `RUN_WORKER=1` on the web
+service and the entrypoint drains the queue from inside the web container.
+Two consequences worth accepting deliberately: background work competes
+with request handling for the same CPU, so a large Canvas sync slows the
+site while it runs; and a free web service that sleeps when idle takes its
+worker with it, so jobs progress while someone is using the app rather
+than on a schedule. Fine for a demo, not for real load.
 
 Setup:
 
