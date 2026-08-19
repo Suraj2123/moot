@@ -1,73 +1,89 @@
 /* moot design system.
  *
- * Dark by default with a light mode, because this is a tool for reading and
- * writing at night. Everything is CSS variables so the two themes differ by a
- * token block rather than by a parallel stylesheet.
+ * Matte black, in the sense an editor is: near-neutral dark surfaces with
+ * almost no colour in them, separated by borders rather than by shadows and
+ * elevation. The previous palette was blue-tinted and lifted panels off the
+ * page; this one keeps chroma close to zero and lets a one-pixel line do the
+ * work, which is what makes a tool read as a surface to work on rather than a
+ * dashboard to look at.
  *
- * The look is meant to be calm and editorial rather than dashboard-y: one
- * accent colour, generous spacing, a serif for long-form reading and a UI sans
- * for everything else. Notes are prose, so they get a prose typeface.
+ * Everything is CSS variables, so the two themes differ by a token block
+ * rather than by a parallel stylesheet.
+ *
+ * Type is one sans throughout, tightened. The serif is gone: it was a nice
+ * idea for prose, but mixing a display serif into a tool makes it feel like a
+ * reading app, and notes here are working material, not an article.
  */
 
 :root {
   --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-prose: "Newsreader", Georgia, "Times New Roman", serif;
+  /* Kept as a token so anything still asking for it gets the UI face rather
+   * than falling back to Times. */
+  --font-prose: var(--font-ui);
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
-  --bg: #0b0d10;
-  --bg-raised: #12151a;
-  --bg-inset: #0e1116;
-  --bg-hover: #171b21;
-  --border: #21262e;
-  --border-strong: #2d343e;
+  /* Greys, not blue-greys. A touch of warmth (r >= g >= b by a point or two)
+   * keeps large black areas from reading as cold. */
+  --bg: #0a0a0a;
+  --bg-raised: #0f0f10;
+  --bg-inset: #070707;
+  --bg-hover: #161617;
+  --border: #1e1e20;
+  --border-strong: #2b2b2e;
 
-  --text: #e8eaed;
-  --text-muted: #9aa3af;
-  --text-faint: #6b7482;
+  --text: #ededee;
+  --text-muted: #8f8f94;
+  --text-faint: #626268;
 
-  --accent: #7aa2ff;
-  --accent-soft: rgba(122, 162, 255, 0.13);
-  --accent-text: #a8c1ff;
+  /* One restrained accent. Bright enough to find, quiet enough that a page
+   * full of controls does not glow. */
+  --accent: #6e8efb;
+  --accent-soft: rgba(110, 142, 251, 0.12);
+  --accent-text: #a3b5fc;
 
-  --good: #5ec98a;
-  --good-soft: rgba(94, 201, 138, 0.13);
-  --warn: #e5b35e;
-  --warn-soft: rgba(229, 179, 94, 0.13);
+  --good: #4ec98a;
+  --good-soft: rgba(78, 201, 138, 0.12);
+  --warn: #e0b252;
+  --warn-soft: rgba(224, 178, 82, 0.12);
   --bad: #f0736a;
-  --bad-soft: rgba(240, 115, 106, 0.13);
+  --bad-soft: rgba(240, 115, 106, 0.12);
 
-  --radius: 10px;
-  --radius-lg: 14px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.22);
+  /* Tighter radii read as more precise; the old 14px was rounding towards
+   * consumer-app softness. */
+  --radius: 7px;
+  --radius-lg: 9px;
+  /* Barely-there. Depth comes from borders, not from lifting things. */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 
-  --sidebar-w: 232px;
+  --sidebar-w: 224px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root[data-theme="light"] {
-  --bg: #fbfbfa;
+  /* The same discipline inverted: near-neutral, borders over shadows. */
+  --bg: #fcfcfc;
   --bg-raised: #ffffff;
-  --bg-inset: #f4f4f2;
-  --bg-hover: #f0f0ee;
-  --border: #e4e4e0;
-  --border-strong: #d4d4cf;
+  --bg-inset: #f6f6f6;
+  --bg-hover: #f1f1f1;
+  --border: #e6e6e6;
+  --border-strong: #d6d6d6;
 
-  --text: #1b1c1e;
-  --text-muted: #5f6570;
-  --text-faint: #8a909a;
+  --text: #17171a;
+  --text-muted: #5e5e66;
+  --text-faint: #8b8b93;
 
-  --accent: #3b65d6;
-  --accent-soft: rgba(59, 101, 214, 0.09);
-  --accent-text: #2c50b4;
+  --accent: #4059d0;
+  --accent-soft: rgba(64, 89, 208, 0.08);
+  --accent-text: #33489f;
 
   --good: #2e8b57;
   --good-soft: rgba(46, 139, 87, 0.1);
-  --warn: #a8730d;
-  --warn-soft: rgba(168, 115, 13, 0.1);
+  --warn: #9a6a0c;
+  --warn-soft: rgba(154, 106, 12, 0.1);
   --bad: #c0392b;
   --bad-soft: rgba(192, 57, 43, 0.09);
 
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 * { box-sizing: border-box; }
@@ -79,8 +95,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 14.5px;
+  font-size: 13.5px;
   line-height: 1.55;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -88,8 +105,8 @@ body {
 a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.015em; }
-h1 { font-size: 1.5rem; }
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.02em; }
+h1 { font-size: 1.35rem; }
 h2 { font-size: 1.15rem; }
 h3 { font-size: 1rem; }
 
@@ -128,10 +145,11 @@ button, input, textarea, select { font: inherit; color: inherit; }
   font-weight: 600; font-size: 15px; letter-spacing: -0.02em;
 }
 .brand-mark {
-  width: 22px; height: 22px; border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), #b28cff);
+  width: 21px; height: 21px; border-radius: 5px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
   display: grid; place-items: center;
-  color: #fff; font-size: 12px; font-weight: 700;
+  color: var(--text); font-size: 12px; font-weight: 600;
   flex: 0 0 auto;
 }
 
@@ -146,7 +164,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   transition: background 0.13s var(--ease), color 0.13s var(--ease);
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 500; }
+.nav-item.active { background: var(--bg-hover); color: var(--text); font-weight: 500; }
 .nav-item svg { flex: 0 0 auto; opacity: 0.85; }
 
 .nav-spacer { flex: 1; }
@@ -279,6 +297,47 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 /* --------------------------------------------------------------- specific */
 
+/* Upload. The dashed border is the one place a dashed line earns its keep --
+ * it reads as "this area accepts something" in a way a solid box does not. */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 30px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.13s var(--ease), background 0.13s var(--ease);
+}
+.dropzone:hover { border-color: var(--text-faint); background: var(--bg-hover); }
+.dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dropzone strong { color: var(--text); font-weight: 500; font-size: 13.5px; }
+.dropzone.dragging {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-soft);
+}
+/* The drag highlight belongs to the zone, so children must not swallow the
+ * events that maintain it. */
+.dropzone.dragging * { pointer-events: none; }
+
+.upload-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.upload-name {
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.small.danger { color: var(--bad); }
+
 .note-item {
   padding: 13px 15px;
   border: 1px solid var(--border);
@@ -315,8 +374,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .score-bar > div { height: 100%; border-radius: 999px; background: var(--accent); }
 
 .snippet {
-  font-family: var(--font-prose);
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.6;
   color: var(--text-muted);
   padding: 10px 13px;
@@ -342,7 +400,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .msg-avatar.you { background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border); }
 .msg-avatar.ai { background: linear-gradient(135deg, var(--accent), #b28cff); color: #fff; }
 .msg-body { min-width: 0; flex: 1; }
-.msg-body .prose { font-family: var(--font-prose); font-size: 15.5px; line-height: 1.68; white-space: pre-wrap; }
+.msg-body .prose { font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 
 .citation {
   display: inline-block;
