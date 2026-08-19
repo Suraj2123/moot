@@ -16,7 +16,16 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from sqlalchemy import text
 from fastapi.responses import (
     FileResponse,
@@ -30,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
 from . import credentials
+from . import documents
 from . import jobs as jobs_module
 from . import preflight
 from . import usage as usage_module
@@ -591,6 +601,73 @@ def create_note(payload: NoteIn, app: StudyLink = Depends(current_app)) -> dict:
     )
     job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
     return {"id": note_id, "job": job.as_dict()}
+
+
+@api.post("/notes/upload", status_code=201)
+async def upload_note(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(default=None),
+    course_id: Optional[int] = Form(default=None),
+    source_type: str = Form(default="note"),
+    app: StudyLink = Depends(current_app),
+) -> dict:
+    """Turn an uploaded document into a note.
+
+    The same shape as POST /notes once the text is out: the note is durable
+    when this returns and searchable once the queued job runs.
+
+    Reading is chunked and checked against the cap as it goes. Reading the
+    whole upload and measuring afterwards would mean a large file has already
+    been in memory by the time it is rejected, which is the opposite of what
+    a limit is for.
+    """
+    if source_type not in {"note", "transcript"}:
+        raise HTTPException(status_code=422, detail="source_type must be note or transcript")
+
+    filename = file.filename or ""
+    if not documents.is_supported(filename):
+        supported = ", ".join(sorted(documents.SUPPORTED))
+        raise HTTPException(
+            status_code=415,
+            detail=f"{documents.suffix_of(filename) or 'That file type'} is not "
+                   f"supported. Upload one of: {supported}.",
+        )
+
+    chunks: list[bytes] = []
+    total = 0
+    while piece := await file.read(64 * 1024):
+        total += len(piece)
+        if total > documents.MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"That file is over the "
+                       f"{documents.MAX_BYTES // (1024 * 1024)} MB limit.",
+            )
+        chunks.append(piece)
+
+    try:
+        extracted = documents.extract(filename, b"".join(chunks))
+    except documents.DocumentError as exc:
+        # 422: the request was well formed and the file is simply not usable.
+        # The message is the whole value here -- it is the only thing telling
+        # someone their PDF is a scan rather than broken.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    note_id = app.add_note(
+        (title or "").strip() or documents.title_from_filename(filename),
+        extracted.text,
+        course_id,
+        source_type,
+        reindex=False,
+    )
+    job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
+    return {
+        "id": note_id,
+        "job": job.as_dict(),
+        "kind": extracted.kind,
+        "chars": len(extracted.text),
+        "notice": extracted.notice,
+    }
 
 
 @api.get("/notes/{note_id}/assignments")
