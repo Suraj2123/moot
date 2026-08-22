@@ -55,8 +55,12 @@ the REST API with a personal access token, following Canvas's link-header
 pagination and stripping HTML descriptions to plain text. Sync is on demand and
 idempotent: re-running it updates rows in place.
 
-**Notes ingestion** — paste or upload markdown/plain text, tagged by course, with
-lecture transcripts as a first-class document type through the same pipeline.
+**Notes ingestion** — type a note, or upload PDF, Word, Markdown, or plain text
+and have the text pulled out of it. Notes can be edited and deleted; editing the
+text drops the stale chunks and re-indexes, while a rename does not, because the
+chunks are still accurate. Lecture transcripts are a first-class document type
+through the same pipeline. A scanned PDF is refused with an explanation rather
+than accepted as an empty note -- there is no OCR yet.
 
 **Semantic matching** — notes are chunked, embedded, and matched against
 assignment descriptions by exact cosine similarity. Retrieval happens at chunk
@@ -81,6 +85,32 @@ enforce that: no retrieval means no model call at all, the prompt states the
 constraint, and every citation is resolved against the notes actually supplied
 so an invented one is reported rather than displayed. Spend is metered per
 account against a monthly allowance.
+
+**Notes that are already flashcards** — write in an outline and mark what you
+want asked, RemNote-style: `term :: definition` makes a card, `:::` asks it both
+ways, `>>` reads as a question, and `{{braces}}` hide a span for a cloze. Nesting
+is context, so a card under *Optimisation* is asked as *Optimisation › learning
+rate* and two courses can both define "cell". The count of cards updates as you
+type, parsed by the same code that saves them so it cannot drift. Editing a note
+re-derives its deck: fixing a typo in an answer keeps the review history,
+rewriting the question makes a new card, and deleting the line deletes the card.
+No model is involved — you said what you wanted asked.
+
+**Progress worth reading** — mastery split (new / learning / mastered, from the
+schedule's own interval estimate), accuracy, a study streak, and a ranked list of
+the cards going worst. The ranking uses a smoothed success rate, not the raw one:
+raw accuracy makes a single missed card the worst thing you own and buries the
+card you have missed eight times out of twenty. Cards you have only ever got
+right are excluded however thin the evidence.
+
+**Generated flashcards and practice tests** — pick a note and moot writes question/answer
+cards from it. Every card must quote the sentence in the note that supports it,
+and one that cannot is dropped rather than shown; the count of dropped cards is
+reported, so groundedness is measured rather than promised. Review uses a small
+SM-2 variant and every grade is stored, so a better scheduler can be fitted to
+real data later. Practice tests are assembled from cards that already exist and
+cost nothing: the wrong options are other answers from the same deck, which are
+genuinely confusable in a way invented ones are not.
 
 **Agent work sessions** — pick an assignment, get matched notes pulled
 automatically, and an agent produces a study outline, draft skeleton, or concept
@@ -122,6 +152,9 @@ retrieval         note <-> assignment matching, with evidence
 chat              grounded Q&A over your notes, with citation checking
 agent             work-session synthesis with citation checking
 usage             per-user LLM cost ledger and monthly cap
+cards             flashcard generation, SM-2 lite scheduling, practice tests
+outline           RemNote-style note syntax -> cards, with stable identities
+progress          mastery states, smoothed weak-card ranking, streaks
 evaluation        labelled set, metrics, LLM judge, config sweep
 service           the facade the UI, API, and scripts all drive
 ```
@@ -160,14 +193,18 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-355 tests, no network, no API keys. Eighteen more cover the Postgres and pgvector
-paths and skip unless you point them at a server:
+602 tests, no network, no API keys. Twenty-two more cover the Postgres and
+pgvector paths and skip unless you point them at a server:
 
 ```bash
 STUDYLINK_TEST_POSTGRES_URL=postgresql+psycopg2://... python -m pytest tests -q
 ```
 
 CI runs both, and diffs the retrieval metrics between the two backends.
+`tests/test_migrations.py` runs the Alembic history end to end on each and
+compares the result against the schema the application code expects — the rest
+of the suite builds its tables with `create_all`, so without it the schema is
+covered and the path that produces it in production is not.
 
 ## Design notes
 
@@ -182,7 +219,8 @@ CI runs both, and diffs the retrieval metrics between the two backends.
 - `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
   decisions behind it.
 - `docs/DEPLOY.md` -- what has to run in production, the two configs shipped
-  (Fly and Railway), and what preflight refuses to boot with.
+  (Fly and Railway), the Render walkthrough, and what preflight refuses to boot
+  with.
 
 ## Learning path
 
@@ -203,6 +241,9 @@ Working MVP.
 - [x] Agent work sessions with citation traceability
 - [x] Streamlit UI + FastAPI
 - [ ] Password reset and email verification (see docs/AUTH.md)
+- [x] Flashcards and practice tests generated from notes, with grounding checks
+- [x] RemNote-style outline notes that declare their own cards, synced on save
+- [x] Progress scoring: mastery states, streaks, and what needs more practice
 - [ ] Lecture audio -> transcript via Whisper (pipeline accepts transcripts already)
 - [ ] Google Classroom as a second integration
 - [x] Background indexing and Canvas sync, off the request path

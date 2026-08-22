@@ -338,6 +338,15 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .small.danger { color: var(--bad); }
 
+/* Destructive actions sitting in a row of ordinary ones: neutral at rest so
+ * the row does not shout, unmistakable under the cursor. Colouring it red
+ * permanently makes every list look alarming; colouring it never makes delete
+ * look like edit. */
+.btn-ghost.danger:hover:not(:disabled) {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
 .note-item {
   padding: 13px 15px;
   border: 1px solid var(--border);
@@ -502,4 +511,69 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 @media (min-width: 821px) {
   .menu-btn, .scrim { display: none; }
+}
+
+/* ------------------------------------------------------------------ study */
+
+.flashcard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  padding: 40px 32px;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.13s var(--ease);
+}
+.flashcard:hover { border-color: var(--border-strong); }
+.flashcard-face { font-size: 18px; font-weight: 500; line-height: 1.45; }
+.flashcard-divider {
+  width: 44px; height: 1px; margin: 20px 0;
+  background: var(--border-strong);
+}
+.flashcard-back { font-size: 16px; color: var(--text); line-height: 1.5; }
+
+/* Test options. Verdict colours only appear after answering, so the page
+ * gives nothing away while the student is still deciding. */
+.choice {
+  display: block; width: 100%; text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.13s var(--ease), background 0.13s var(--ease);
+}
+.choice:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-hover); }
+.choice:disabled { cursor: default; }
+.choice.right { border-color: var(--good); background: var(--good-soft); }
+.choice.wrong { border-color: var(--bad); background: var(--bad-soft); }
+
+.stat-row { display: flex; flex-wrap: wrap; gap: 26px; }
+.stat-value { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+
+/* One bar rather than three numbers: the split between mastered, learning,
+ * and untouched is a proportion, and a proportion is a length. */
+.mastery-bar {
+  display: flex; height: 6px; margin-top: 14px;
+  border-radius: 999px; overflow: hidden; background: var(--bg-inset);
+}
+.mastery-bar .seg { height: 100%; }
+.mastery-bar .mastered { background: var(--good); }
+.mastery-bar .learning { background: var(--accent); }
+.mastery-bar .new { background: var(--border-strong); }
+
+/* Card syntax is easier to see in a monospaced face -- the `::` is the whole
+ * point of the line and proportional type buries it. */
+.outline-editor {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
 }

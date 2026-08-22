@@ -76,6 +76,8 @@ export const api = {
   get: <T>(path: string) => fetch(path, { headers: headers() }).then(handle<T>),
   post: <T>(path: string, body?: unknown) =>
     fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body ?? {}) }).then(handle<T>),
+  patch: <T>(path: string, body?: unknown) =>
+    fetch(path, { method: "PATCH", headers: headers(), body: JSON.stringify(body ?? {}) }).then(handle<T>),
   del: <T>(path: string) => fetch(path, { method: "DELETE", headers: headers() }).then(handle<T>),
 
   /**
@@ -126,6 +128,8 @@ export interface Assignment {
 export interface Note {
   id: number; title: string; course: string | null;
   source_type: string; chars: number;
+  /** Whether retrieval can see this note yet. */
+  index_status?: "indexed" | "queued" | "stale";
 }
 export interface Evidence {
   /** Terms the note and the assignment actually share -- the reason for the match. */
@@ -180,6 +184,13 @@ export const notes = {
   create: (title: string, body: string, course_id?: number | null) =>
     api.post<{ id: number; job: Job }>("/notes", { title, body, course_id: course_id ?? null }),
   assignmentsFor: (id: number) => api.get<Match[]>(`/notes/${id}/assignments`),
+  /** Only the fields present are changed; `reindexed` says whether the text moved. */
+  update: (
+    id: number,
+    patch: { title?: string; body?: string; course_id?: number | null; clear_course?: boolean },
+  ) => api.patch<{ id: number; reindexed: boolean; job: Job | null }>(`/notes/${id}`, patch),
+  remove: (id: number) => api.del<void>(`/notes/${id}`),
+  get: (id: number) => api.get<Note & { body: string }>(`/notes/${id}`),
 };
 
 export const courses = { list: () => api.get<Course[]>("/courses") };
@@ -259,3 +270,111 @@ export async function* askStream(
     }
   }
 }
+
+/* ----------------------------------------------------------------- cards */
+
+export interface Deck {
+  id: number;
+  title: string;
+  course_id: number | null;
+  created_at: string;
+  cards: number;
+  due: number;
+}
+export interface Card {
+  id: number;
+  deck_id: number;
+  note_id: number | null;
+  front: string;
+  back: string;
+  /** The sentence from the note that supports this card. */
+  evidence: string;
+  due_at: string | null;
+  interval_days: number;
+  ease: number;
+  reviews: number;
+  lapses: number;
+}
+export interface DeckDetail extends Deck {
+  studied: number;
+  items: Card[];
+}
+export interface TestQuestion {
+  card_id: number;
+  prompt: string;
+  choices: string[];
+  answer: string;
+  kind: "multiple_choice" | "written";
+}
+
+/** 0 forgot, 1 hard, 2 good, 3 easy — matches studylink/cards.py. */
+export const FORGOT = 0, HARD = 1, GOOD = 2, EASY = 3;
+
+export const decks = {
+  list: () => api.get<Deck[]>("/decks"),
+  get: (id: number) => api.get<DeckDetail>(`/decks/${id}`),
+  create: (note_id: number, count = 10, title?: string) =>
+    api.post<{ deck_id: number; cards: number; rejected: number }>(
+      "/decks", { note_id, count, title: title ?? null },
+    ),
+  remove: (id: number) => api.del<void>(`/decks/${id}`),
+  study: (id: number) => api.get<Card[]>(`/decks/${id}/study`),
+  review: (cardId: number, grade: number) =>
+    api.post<{ card_id: number; interval_days: number; due_at: string }>(
+      `/cards/${cardId}/review`, { grade },
+    ),
+  test: (id: number, kind: "multiple_choice" | "written" = "multiple_choice", length = 10) =>
+    api.get<{ deck_id: number; questions: TestQuestion[] }>(
+      `/decks/${id}/test?kind=${kind}&length=${length}`,
+    ),
+  check: (given: string, expected: string) =>
+    api.post<{ verdict: "correct" | "close" | "wrong"; expected: string }>(
+      "/cards/check", { given, expected },
+    ),
+};
+
+/* --------------------------------------------------- outline & progress */
+
+export interface OutlineCard {
+  front: string;
+  back: string;
+  evidence: string;
+  kind: string;
+  source_key: string;
+}
+export interface CardPerformance {
+  id: number;
+  deck_id: number;
+  front: string;
+  back: string;
+  attempts: number;
+  correct: number;
+  accuracy: number | null;
+  lapses: number;
+  interval_days: number;
+  confidence?: number;
+}
+export interface Progress {
+  cards: number;
+  new: number;
+  learning: number;
+  mastered: number;
+  attempts: number;
+  correct: number;
+  accuracy: number | null;
+  streak_days: number;
+  reviews_recent: number;
+  activity: { day: string; reviews: number; correct: number }[];
+}
+
+export const study = {
+  /** Parse without saving, so the editor can count cards as you type. */
+  preview: (text: string) =>
+    api.post<{ cards: OutlineCard[] }>("/outline/preview", { text }),
+  progress: (deckId?: number) =>
+    api.get<Progress>(`/progress${deckId ? `?deck_id=${deckId}` : ""}`),
+  weak: (deckId?: number, limit = 10) =>
+    api.get<CardPerformance[]>(
+      `/progress/weak?limit=${limit}${deckId ? `&deck_id=${deckId}` : ""}`,
+    ),
+};

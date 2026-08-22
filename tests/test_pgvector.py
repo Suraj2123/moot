@@ -544,3 +544,62 @@ def test_native_column_uses_the_configured_dimension(pg_conn):
         )
     ).scalar()
     assert dim == configured_dim()
+
+
+# ------------------------------------------------- note lifecycle on Postgres
+#
+# `note_index_status` aggregates with SUM(CASE ...), which Postgres returns as
+# Decimal and SQLite as int. A SQLite-only run cannot catch a comparison that
+# assumes one of those -- exactly the class of difference this file exists for.
+
+
+@requires_postgres
+def test_index_status_is_correct_on_postgres(pg_conn, provider, config):
+    user_id = store.get_or_create_default_user(pg_conn)
+    note_id = store.create_note(pg_conn, "Note", "Gradient descent.", user_id=user_id)
+
+    def status_now():
+        return store.note_index_status(
+            pg_conn, user_id, model=provider.name,
+            chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap,
+        )
+
+    assert status_now().get(note_id) in (None, "stale")
+
+    store.replace_chunks(
+        pg_conn, note_id, ["alpha", "beta"], config.chunk_size, config.chunk_overlap
+    )
+    assert status_now()[note_id] == "stale", "chunked but not embedded is not searchable"
+
+    Indexer(pg_conn, provider, config, user_id).reindex()
+    assert status_now()[note_id] == "indexed"
+
+
+
+@requires_postgres
+def test_clearing_chunks_removes_vectors_on_postgres(pg_conn, provider, config):
+    """embeddings has no foreign key, so nothing cascades on either backend --
+    but only Postgres would have enforced one if it existed."""
+    user_id = store.get_or_create_default_user(pg_conn)
+    note_id = store.create_note(pg_conn, "Note", "Gradient descent.", user_id=user_id)
+    Indexer(pg_conn, provider, config, user_id).reindex()
+
+    chunk_ids = [c.id for c in store.list_chunks(pg_conn, user_id) if c.note_id == note_id]
+    assert chunk_ids
+    assert _vectors_for(pg_conn, chunk_ids) > 0
+
+    store.clear_chunks(pg_conn, note_id, user_id)
+
+    assert _vectors_for(pg_conn, chunk_ids) == 0
+    assert [c for c in store.list_chunks(pg_conn, user_id) if c.note_id == note_id] == []
+
+
+def _vectors_for(conn, chunk_ids):
+    from sqlalchemy import func, select
+
+    return conn.execute(
+        select(func.count()).select_from(embeddings).where(
+            embeddings.c.owner_type == "chunk",
+            embeddings.c.owner_id.in_(chunk_ids),
+        )
+    ).scalar()

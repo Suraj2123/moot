@@ -192,6 +192,33 @@ def client(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def conn_for_client():
+    """A connection to the same database the `client` fixture is serving.
+
+    Some things are only observable below the API -- that a chunk row went
+    away, that a vector went with it. Asserting those through HTTP would mean
+    building endpoints that exist only for the tests, so this reaches into the
+    same engine the app is using instead.
+
+    Depends on `client` having run first, since that is what points the engine
+    at the throwaway database.
+    """
+    from studylink import api as api_module
+
+    connections = []
+
+    def _connect():
+        conn = api_module.engine().connect()
+        connections.append(conn)
+        return conn
+
+    yield _connect
+
+    for conn in connections:
+        conn.close()
+
+
+@pytest.fixture
 def signup():
     """Register an account through the API and return its bearer token."""
 

@@ -3,19 +3,21 @@ import { auth, setUnauthorizedHandler, getToken, setToken, type User } from "./a
 import { AuthPage } from "./pages/Auth";
 import { ChatPage } from "./pages/Chat";
 import { NotesPage } from "./pages/Notes";
+import { StudyPage } from "./pages/Study";
 import { AssignmentsPage } from "./pages/Assignments";
 import { SettingsPage } from "./pages/Settings";
 import {
-  IconAssignments, IconChat, IconMenu, IconMoon,
+  IconAssignments, IconCards, IconChat, IconMenu, IconMoon,
   IconNotes, IconSettings, IconSun,
 } from "./components/Icons";
 import { Spinner } from "./components/ui";
 
-type Tab = "chat" | "notes" | "assignments" | "settings";
+type Tab = "chat" | "notes" | "study" | "assignments" | "settings";
 
 const TABS: { id: Tab; label: string; icon: () => JSX.Element; title: string }[] = [
   { id: "chat", label: "Ask", icon: IconChat, title: "Ask your notes" },
   { id: "notes", label: "Notes", icon: IconNotes, title: "Notes" },
+  { id: "study", label: "Study", icon: IconCards, title: "Study" },
   { id: "assignments", label: "Assignments", icon: IconAssignments, title: "Assignments" },
   { id: "settings", label: "Settings", icon: IconSettings, title: "Settings" },
 ];
@@ -105,6 +107,7 @@ export function App() {
         ) : (
           <div className="content">
             {tab === "notes" ? <NotesPage /> : null}
+            {tab === "study" ? <StudyPage /> : null}
             {tab === "assignments" ? <AssignmentsPage /> : null}
             {tab === "settings" ? (
               <SettingsPage

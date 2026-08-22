@@ -4,6 +4,7 @@ import {
   type Job, type Note, type Match,
 } from "../api";
 import { Alert, Empty, Skeleton, ConfidenceBadge, ScoreBar } from "../components/ui";
+import { OutlineEditor } from "../components/OutlineEditor";
 import { IconPlus, IconSearch, IconUpload } from "../components/Icons";
 
 export function NotesPage() {
@@ -13,6 +14,28 @@ export function NotesPage() {
   const [composing, setComposing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
+
+  async function remove(note: Note) {
+    if (!window.confirm(`Delete "${note.title}"? This cannot be undone.`)) return;
+
+    // Optimistic: the row goes immediately, and comes back if the server
+    // disagrees. Deleting is the one action where waiting feels broken --
+    // you already know what you wanted to happen.
+    const before = items;
+    setItems((prev) => prev?.filter((n) => n.id !== note.id) ?? prev);
+    setDeleting(note.id);
+    try {
+      await notes.remove(note.id);
+      setError("");
+    } catch (err) {
+      setItems(before);
+      setError(err instanceof ApiError ? err.message : "Could not delete that note.");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   async function load(term = search) {
     try {
@@ -86,26 +109,146 @@ export function NotesPage() {
         <div className="stack">
           {items.map((note) => (
             <div key={note.id}>
-              <div className="note-item" onClick={() => setOpen(open === note.id ? null : note.id)}>
-                <div className="between">
-                  <div style={{ minWidth: 0 }}>
-                    <h3>{note.title}</h3>
-                    <div className="small faint">
-                      {/* `||`, not `??`: an unassigned note comes back with an
-                          empty course name rather than null, which `??` passes
-                          straight through and renders as a stray separator. */}
-                      {note.course || "Unassigned"} · {note.chars.toLocaleString()} characters
-                      {note.source_type === "transcript" ? " · transcript" : ""}
+              {editing === note.id ? (
+                <NoteEditor
+                  note={note}
+                  onCancel={() => setEditing(null)}
+                  onSaved={() => { setEditing(null); load(); }}
+                />
+              ) : (
+                <div className="note-item" onClick={() => setOpen(open === note.id ? null : note.id)}>
+                  <div className="between">
+                    <div style={{ minWidth: 0 }}>
+                      <h3>{note.title}</h3>
+                      <div className="small faint">
+                        {/* `||`, not `??`: an unassigned note comes back with an
+                            empty course name rather than null, which `??` passes
+                            straight through and renders as a stray separator. */}
+                        {note.course || "Unassigned"} · {note.chars.toLocaleString()} characters
+                        {note.source_type === "transcript" ? " · transcript" : ""}
+                      </div>
+                    </div>
+                    <div className="row" onClick={(e) => e.stopPropagation()}>
+                      <IndexBadge status={note.index_status} />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => { setEditing(note.id); setOpen(null); }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm danger"
+                        onClick={() => remove(note)}
+                        disabled={deleting === note.id}
+                      >
+                        {deleting === note.id ? "Deleting…" : "Delete"}
+                      </button>
+                      <span
+                        className="badge"
+                        onClick={() => setOpen(open === note.id ? null : note.id)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        {open === note.id ? "Hide" : "Related"}
+                      </span>
                     </div>
                   </div>
-                  <span className="badge">{open === note.id ? "Hide" : "Related"}</span>
                 </div>
-              </div>
+              )}
               {open === note.id ? <RelatedAssignments noteId={note.id} /> : null}
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Whether retrieval can see this note yet.
+ *
+ * Worth showing because the alternative is silent: a note saves, does not
+ * match anything for a few seconds, and looks broken. Naming the state turns
+ * a bug report into a wait.
+ */
+function IndexBadge({ status }: { status?: Note["index_status"] }) {
+  if (!status || status === "indexed") return null;
+  return (
+    <span className="badge" title={
+      status === "queued"
+        ? "Waiting for the indexer. It will be searchable shortly."
+        : "Not indexed yet. Start the worker to process the queue."
+    }>
+      {status === "queued" ? "Indexing…" : "Not indexed"}
+    </span>
+  );
+}
+
+function NoteEditor({
+  note, onCancel, onSaved,
+}: { note: Note; onCancel: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(note.title);
+  const [body, setBody] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // The list omits bodies, so the text has to be fetched before it can be
+  // edited. Until it arrives the textarea stays disabled rather than showing
+  // an empty box someone might type into and save over the real note.
+  useEffect(() => {
+    let alive = true;
+    notes.get(note.id)
+      .then((full) => alive && setBody(full.body))
+      .catch((err) => alive && setError(
+        err instanceof ApiError ? err.message : "Could not load that note.",
+      ));
+    return () => { alive = false; };
+  }, [note.id]);
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await notes.update(note.id, { title: title.trim(), body: body ?? undefined });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save that note.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      {error ? <Alert>{error}</Alert> : null}
+      <div className="field">
+        <label htmlFor={`edit-title-${note.id}`}>Title</label>
+        <input
+          id={`edit-title-${note.id}`} className="input" autoFocus
+          value={title} onChange={(e) => setTitle(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`edit-body-${note.id}`}>Note</label>
+        <OutlineEditor
+          id={`edit-body-${note.id}`}
+          value={body ?? ""}
+          disabled={body === null}
+          placeholder={body === null ? "Loading…" : ""}
+          onChange={setBody}
+          minHeight={200}
+        />
+      </div>
+      <div className="row">
+        <button
+          className="btn btn-primary"
+          onClick={save}
+          disabled={busy || body === null || !title.trim()}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        <span className="small faint">
+          Editing the text re-indexes this note; renaming does not.
+        </span>
+      </div>
     </div>
   );
 }
@@ -284,10 +427,12 @@ function NoteComposer({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       </div>
       <div className="field">
         <label htmlFor="note-body">Note</label>
-        <textarea
-          id="note-body" className="textarea" style={{ minHeight: 190 }}
-          value={body} onChange={(e) => setBody(e.target.value)}
-          placeholder="Paste or write your notes here. Markdown and plain text both work."
+        <OutlineEditor
+          id="note-body"
+          value={body}
+          onChange={setBody}
+          minHeight={190}
+          placeholder={"Write your notes as an outline.\n\nlearning rate :: controls the step size\nThe capital of France is {{Paris}}"}
         />
       </div>
       <div className="row">

@@ -14,7 +14,11 @@ from typing import Optional
 
 from sqlalchemy import Connection, func, select
 
+from . import cards as cards_module
+from . import outline as outline_module
+from . import progress as progress_module
 from . import credentials, schema, store
+from . import usage as usage_module
 from .agent import WorkSessionAgent
 from .canvas import CanvasClient, CanvasError, SyncResult, sync_all
 from .config import RetrievalConfig, Settings, load_settings
@@ -151,13 +155,64 @@ class StudyLink:
         reindex: bool = True,
     ) -> int:
         note_id = store.create_note(self.conn, title, body, course_id, source_type, self.user_id)
+        self.sync_note_cards(note_id, title, body)
         if reindex:
             self.reindex()
         return note_id
 
+    def update_note(
+        self,
+        note_id: int,
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+        course_id: Optional[int] = None,
+        clear_course: bool = False,
+    ) -> bool:
+        """Edit a note. Returns whether the text changed and needs reindexing.
+
+        Only a body change matters to retrieval. Renaming a note or filing it
+        under a course leaves every chunk still accurate, so those do not
+        invalidate an index that may have taken a while to build.
+
+        A body change does invalidate it, and the invalidation has to be
+        explicit: the indexer decides what to rebuild by comparing chunking
+        parameters, which are unchanged by an edit, so without dropping the
+        chunks here the note would keep matching on text the student removed.
+        """
+        assert_owned(self.conn, "notes", note_id, self.user_id)
+        current = store.get_note(self.conn, note_id, self.user_id)
+        if current is None:  # pragma: no cover - assert_owned already raised
+            raise LookupError(note_id)
+
+        new_title = current.title if title is None else title.strip()
+        new_body = current.body if body is None else body
+        body_changed = new_body != current.body
+
+        store.update_note(self.conn, note_id, new_title, new_body, self.user_id)
+        if clear_course or course_id is not None:
+            store.set_note_course(
+                self.conn, note_id, None if clear_course else course_id, self.user_id
+            )
+        if body_changed:
+            store.clear_chunks(self.conn, note_id, self.user_id)
+        # Always, not only on a body change: renaming a note renames the deck
+        # it owns, and leaving that stale is a deck the student cannot find.
+        self.sync_note_cards(note_id, new_title, new_body)
+        return body_changed
+
     def delete_note(self, note_id: int) -> None:
         assert_owned(self.conn, "notes", note_id, self.user_id)
         store.delete_note(self.conn, note_id, self.user_id)
+
+    def note_index_status(self) -> dict[int, str]:
+        """note id -> "indexed" | "stale", for the whole account in one query."""
+        return store.note_index_status(
+            self.conn,
+            self.user_id,
+            model=self.settings.embedding_model,
+            chunk_size=self.settings.retrieval.chunk_size,
+            chunk_overlap=self.settings.retrieval.chunk_overlap,
+        )
 
     def list_notes(self, course_id: Optional[int] = None, search: str = "") -> list[Note]:
         return store.list_notes(self.conn, self.user_id, course_id=course_id, search=search)
@@ -204,6 +259,136 @@ class StudyLink:
 
     def agent(self) -> WorkSessionAgent:
         return WorkSessionAgent(self.conn, self.retriever)
+
+    # --------------------------------------------------------------------- cards
+
+    def make_deck_from_note(
+        self, note_id: int, count: int = 10, title: Optional[str] = None, writer=None
+    ) -> dict:
+        """Generate a deck of flashcards from one note.
+
+        Ungrounded cards are dropped before anything is stored, and the count
+        is reported. A card that teaches something the note never said is worse
+        than no card at all -- the student will study it and believe it -- so
+        the failure mode here is "fewer cards than asked for", never "a card
+        that cannot be traced".
+        """
+        assert_owned(self.conn, "notes", note_id, self.user_id)
+        note = store.get_note(self.conn, note_id, self.user_id)
+        if note is None:  # pragma: no cover - assert_owned already raised
+            raise NotFoundError("notes", note_id)
+
+        usage_module.check_budget(self.conn, self.user_id)
+        writer = writer or cards_module.CardWriter()
+        generated = writer.write(note.title, note.body, count=count)
+
+        if generated.usage:
+            usage_module.record(
+                self.conn, self.user_id, "cards", writer.model,
+                int(generated.usage.get("input_tokens", 0)),
+                int(generated.usage.get("output_tokens", 0)),
+            )
+
+        if not generated.cards:
+            raise cards_module.CardError(
+                "No cards could be grounded in that note. Every card has to quote "
+                "the note it came from, and none of the generated ones did."
+            )
+
+        deck_id = store.create_deck(
+            self.conn, self.user_id,
+            title=(title or "").strip() or note.title,
+            course_id=note.course_id,
+        )
+        for draft in generated.cards:
+            draft.note_id = note_id
+        card_ids = store.add_cards(self.conn, self.user_id, deck_id, generated.cards)
+
+        return {
+            "deck_id": deck_id,
+            "cards": len(card_ids),
+            "rejected": generated.rejected,
+        }
+
+    def list_decks(self) -> list[dict]:
+        return store.list_decks(self.conn, self.user_id)
+
+    def get_deck(self, deck_id: int) -> Optional[dict]:
+        return store.get_deck(self.conn, deck_id, self.user_id)
+
+    def list_cards(self, deck_id: Optional[int] = None, due_only: bool = False) -> list[dict]:
+        if deck_id is not None:
+            assert_owned(self.conn, "decks", deck_id, self.user_id)
+        return store.list_cards(
+            self.conn, self.user_id, deck_id=deck_id, due_only=due_only
+        )
+
+    def review_card(self, card_id: int, grade: int) -> dict:
+        """Grade a card and schedule its next appearance."""
+        assert_owned(self.conn, "cards", card_id, self.user_id)
+        card = store.get_card(self.conn, card_id, self.user_id)
+        if card is None:  # pragma: no cover - assert_owned already raised
+            raise NotFoundError("cards", card_id)
+
+        interval, ease, due_at = cards_module.schedule(
+            grade=grade,
+            interval_days=int(card["interval_days"]),
+            ease=int(card["ease"]),
+            reviews=int(card["reviews"]),
+        )
+        store.record_review(
+            self.conn, self.user_id, card_id, grade,
+            interval_days=interval, ease=ease, due_at=due_at,
+            lapsed=grade == cards_module.FORGOT,
+        )
+        return {
+            "card_id": card_id,
+            "interval_days": interval,
+            "ease": ease,
+            "due_at": due_at.isoformat(timespec="seconds"),
+        }
+
+    def build_test(self, deck_id: int, kind: str = "multiple_choice", length: int = 10):
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        deck_cards = store.list_cards(self.conn, self.user_id, deck_id=deck_id)
+        return cards_module.build_test(deck_cards, kind=kind, length=length)
+
+    def delete_deck(self, deck_id: int) -> None:
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        store.delete_deck(self.conn, deck_id, self.user_id)
+
+    def deck_stats(self, deck_id: int) -> dict:
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        return store.deck_stats(self.conn, self.user_id, deck_id)
+
+    def sync_note_cards(self, note_id: int, title: str, body: str) -> dict:
+        """Keep a note's own deck in step with the cards its text declares.
+
+        Runs on every save. Costs one parse and, when nothing changed, a
+        handful of no-op updates -- cheap enough that making it a background
+        job would add a window where the note and its cards disagree for no
+        benefit anyone can perceive.
+        """
+        return store.sync_note_cards(
+            self.conn, self.user_id, note_id,
+            outline_module.to_cards(body), title=title or "Untitled",
+        )
+
+    def card_performance(self, deck_id: Optional[int] = None) -> list[dict]:
+        if deck_id is not None:
+            assert_owned(self.conn, "decks", deck_id, self.user_id)
+        return store.card_performance(self.conn, self.user_id, deck_id=deck_id)
+
+    def needs_practice(self, deck_id: Optional[int] = None, limit: int = 10) -> list[dict]:
+        return progress_module.needs_practice(
+            self.card_performance(deck_id=deck_id), limit=limit
+        )
+
+    def progress(self, deck_id: Optional[int] = None, days: int = 30) -> dict:
+        return progress_module.summarise(
+            self.card_performance(deck_id=deck_id),
+            store.review_activity(self.conn, self.user_id, days=days),
+        )
 
     # ---------------------------------------------------------------- evaluation
 

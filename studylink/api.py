@@ -29,6 +29,7 @@ from fastapi import (
 from sqlalchemy import text
 from fastapi.responses import (
     FileResponse,
+    Response,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -38,8 +39,10 @@ from pydantic import BaseModel, EmailStr, Field
 logger = logging.getLogger(__name__)
 
 from . import auth as auth_module
+from . import cards as cards_module
 from . import credentials
 from . import documents
+from . import outline
 from . import jobs as jobs_module
 from . import preflight
 from . import usage as usage_module
@@ -181,6 +184,20 @@ class NoteIn(BaseModel):
     source_type: str = Field(default="note", pattern="^(note|transcript)$")
 
 
+class NotePatchIn(BaseModel):
+    """Every field optional: a PATCH says what changed, not what the note is.
+
+    `course_id` needs three states -- leave alone, set, and unset -- which one
+    optional integer cannot carry, so unsetting is its own flag rather than a
+    magic value.
+    """
+
+    title: Optional[str] = None
+    body: Optional[str] = None
+    course_id: Optional[int] = None
+    clear_course: bool = False
+
+
 class SignupIn(BaseModel):
     email: str
     password: str
@@ -205,6 +222,27 @@ class CanvasConnectIn(BaseModel):
 class PasswordChangeIn(BaseModel):
     current_password: str
     new_password: str
+
+
+class DeckIn(BaseModel):
+    note_id: int
+    count: int = Field(default=10, ge=1, le=20)
+    title: Optional[str] = None
+
+
+class ReviewIn(BaseModel):
+    """0 forgot, 1 hard, 2 good, 3 easy."""
+
+    grade: int = Field(ge=0, le=3)
+
+
+class OutlinePreviewIn(BaseModel):
+    text: str
+
+
+class WrittenAnswerIn(BaseModel):
+    given: str
+    expected: str
 
 
 class WorkSessionIn(BaseModel):
@@ -574,6 +612,24 @@ def list_notes(
     search: str = "",
     app: StudyLink = Depends(current_app),
 ) -> list[dict]:
+    # One status query for the list, not one per note. "queued" is decided
+    # here rather than in the store because it is a fact about the job table,
+    # not about the note: a pending reindex means every stale note is about to
+    # be picked up, and saying so is the difference between "this is broken"
+    # and "this is coming".
+    status = app.note_index_status()
+    pending = any(
+        job.status in {jobs_module.QUEUED, jobs_module.RUNNING}
+        and job.kind == jobs_module.KIND_REINDEX
+        for job in jobs_module.list_for_user(app.conn, app.user_id)
+    )
+
+    def index_state(note_id: int) -> str:
+        state = status.get(note_id, "stale")
+        if state == "stale" and pending:
+            return "queued"
+        return state
+
     return [
         {
             "id": n.id,
@@ -581,6 +637,7 @@ def list_notes(
             "course": n.course_name,
             "source_type": n.source_type,
             "chars": len(n.body),
+            "index_status": index_state(n.id),
         }
         for n in app.list_notes(course_id=course_id, search=search)
     ]
@@ -601,6 +658,66 @@ def create_note(payload: NoteIn, app: StudyLink = Depends(current_app)) -> dict:
     )
     job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
     return {"id": note_id, "job": job.as_dict()}
+
+
+@api.get("/notes/{note_id}")
+def get_note(note_id: int, app: StudyLink = Depends(current_app)) -> dict:
+    """One note, including its body.
+
+    The list endpoint deliberately omits bodies -- a hundred notes is a lot of
+    text to send to render titles -- so editing needs somewhere to fetch the
+    text from.
+    """
+    note = app.get_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return {
+        "id": note.id,
+        "title": note.title,
+        "body": note.body,
+        "course": note.course_name,
+        "course_id": note.course_id,
+        "source_type": note.source_type,
+        "chars": len(note.body),
+    }
+
+
+@api.patch("/notes/{note_id}")
+def update_note(
+    note_id: int, payload: NotePatchIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Edit a note. Queues a reindex only when the text actually changed.
+
+    A rename or a course change leaves every chunk still accurate, and
+    reindexing on those would throw away work for nothing.
+    """
+    changed = app.update_note(
+        note_id,
+        title=payload.title,
+        body=payload.body,
+        course_id=payload.course_id,
+        clear_course=payload.clear_course,
+    )
+    job = None
+    if changed:
+        job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
+    return {
+        "id": note_id,
+        "reindexed": changed,
+        "job": job.as_dict() if job else None,
+    }
+
+
+@api.delete("/notes/{note_id}", status_code=204)
+def delete_note(note_id: int, app: StudyLink = Depends(current_app)) -> Response:
+    """Remove a note, its chunks, and their vectors.
+
+    204 with no body: there is nothing useful to say about a thing that no
+    longer exists, and returning the deleted row invites callers to depend on
+    it.
+    """
+    app.delete_note(note_id)
+    return Response(status_code=204)
 
 
 @api.post("/notes/upload", status_code=201)
@@ -881,6 +998,166 @@ def work_session(
         "matches": [m.as_dict() for m in matches],
         "traceability": citation_coverage(output.text, offered),
     }
+
+
+# ---------------------------------------------------------------------- cards
+
+
+@api.post("/decks", status_code=201)
+def create_deck(payload: DeckIn, app: StudyLink = Depends(current_app)) -> dict:
+    """Generate a deck of flashcards from one note.
+
+    `rejected` is part of the response on purpose. Cards that could not be
+    traced to a sentence in the note are dropped, and saying how many were
+    dropped is a measurable groundedness signal rather than a promise.
+    """
+    try:
+        return app.make_deck_from_note(
+            payload.note_id, count=payload.count, title=payload.title
+        )
+    except cards_module.GenerationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except cards_module.CardError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except usage_module.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+
+@api.get("/decks")
+def list_decks(app: StudyLink = Depends(current_app)) -> list[dict]:
+    return app.list_decks()
+
+
+@api.get("/decks/{deck_id}")
+def get_deck(deck_id: int, app: StudyLink = Depends(current_app)) -> dict:
+    deck = app.get_deck(deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return {**deck, **app.deck_stats(deck_id), "items": app.list_cards(deck_id=deck_id)}
+
+
+@api.delete("/decks/{deck_id}", status_code=204)
+def delete_deck(deck_id: int, app: StudyLink = Depends(current_app)) -> Response:
+    app.delete_deck(deck_id)
+    return Response(status_code=204)
+
+
+@api.get("/decks/{deck_id}/study")
+def study_queue(
+    deck_id: int, limit: int = 20, app: StudyLink = Depends(current_app)
+) -> list[dict]:
+    """The cards due now, soonest first.
+
+    Answers are included: this is a study session, and hiding the back until
+    the student flips it is the client's job. Round-tripping for each answer
+    would put a network hop in the middle of the one interaction that has to
+    feel immediate.
+    """
+    return app.list_cards(deck_id=deck_id, due_only=True)[: max(1, min(limit, 100))]
+
+
+@api.post("/cards/{card_id}/review")
+def review_card(
+    card_id: int, payload: ReviewIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    try:
+        return app.review_card(card_id, payload.grade)
+    except cards_module.CardError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@api.get("/decks/{deck_id}/test")
+def practice_test(
+    deck_id: int,
+    kind: str = "multiple_choice",
+    length: int = 10,
+    app: StudyLink = Depends(current_app),
+) -> dict:
+    """A practice test built from cards that already exist.
+
+    No model call: the wrong answers are other answers from the same deck,
+    which is free and produces better distractors than generating them, because
+    options drawn from the same lecture are genuinely confusable.
+    """
+    if kind not in {"multiple_choice", "written"}:
+        raise HTTPException(status_code=422, detail="kind must be multiple_choice or written")
+    try:
+        questions = app.build_test(deck_id, kind=kind, length=length)
+    except cards_module.CardError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"deck_id": deck_id, "questions": [q.as_dict() for q in questions]}
+
+
+@api.post("/cards/check")
+def check_written(
+    payload: WrittenAnswerIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Grade a typed answer against the stored one.
+
+    Pure string comparison over two values the caller already has, so it needs
+    no data -- but it still requires a session, because "every endpoint is
+    authenticated" is a rule worth more than the one exception it would buy.
+
+    "close" is a real verdict rather than a hedge: exact match on free text is
+    brutal, and deciding a paraphrase is right needs a model call per answer.
+    The student is shown the real answer and makes the call.
+    """
+    return {
+        "verdict": cards_module.grade_written(payload.given, payload.expected),
+        "expected": payload.expected,
+    }
+
+
+@api.get("/progress")
+def progress(
+    deck_id: Optional[int] = None,
+    days: int = 30,
+    app: StudyLink = Depends(current_app),
+) -> dict:
+    """How the studying is going: mastery, accuracy, streak, recent activity."""
+    return app.progress(deck_id=deck_id, days=min(max(days, 1), 365))
+
+
+@api.get("/progress/weak")
+def weak_cards(
+    deck_id: Optional[int] = None,
+    limit: int = 10,
+    app: StudyLink = Depends(current_app),
+) -> list[dict]:
+    """Cards worth revisiting, worst first.
+
+    Ranked by a smoothed success rate rather than the raw one: a single wrong
+    answer out of one attempt reads as 0% and would otherwise outrank a card
+    missed eight times out of twenty, which is the one actually going badly.
+    """
+    return app.needs_practice(deck_id=deck_id, limit=min(max(limit, 1), 100))
+
+
+@api.get("/notes/{note_id}/cards")
+def note_cards(note_id: int, app: StudyLink = Depends(current_app)) -> dict:
+    """The cards a note currently declares in its own text.
+
+    A preview, parsed rather than read back from storage, so the editor can
+    show what will exist after a save without having to save first.
+    """
+    note = app.get_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"note_id": note_id, "cards": outline.to_cards(note.body)}
+
+
+@api.post("/outline/preview")
+def preview_outline(
+    payload: OutlinePreviewIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Parse text and report the cards it declares, without storing anything.
+
+    Lets the editor show a live count as someone types, which is what teaches
+    the syntax. Reads nothing and writes nothing, and still takes a session --
+    same reasoning as /cards/check: the value of "every endpoint is
+    authenticated" is that it has no exceptions to remember.
+    """
+    return {"cards": outline.to_cards(payload.text)}
 
 
 @api.get("/evaluation")

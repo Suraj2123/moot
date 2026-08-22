@@ -172,6 +172,74 @@ def test_deleting_a_user_takes_their_data_with_them(conn, two_users):
     assert len(store.list_notes(conn, two_users["bob"])) == 1
 
 
+# ------------------------------------------------------- the note lifecycle
+#
+# Edit and delete take a caller-supplied note id, which is exactly the shape
+# that leaks one account into another when the ownership check is missing.
+
+
+def test_editing_another_users_note_is_refused(conn, two_users):
+    from studylink.context import UserContext
+    from studylink.service import StudyLink
+
+    alice = StudyLink(user=UserContext(user_id=two_users["alice"]), conn=conn)
+
+    with pytest.raises(CrossUserAccessError):
+        alice.update_note(two_users["bob_note"], title="mine now")
+
+    bob_note = store.get_note(conn, two_users["bob_note"], two_users["bob"])
+    assert bob_note is not None and bob_note.title != "mine now"
+
+
+def test_deleting_another_users_note_is_refused(conn, two_users):
+    from studylink.context import UserContext
+    from studylink.service import StudyLink
+
+    alice = StudyLink(user=UserContext(user_id=two_users["alice"]), conn=conn)
+
+    with pytest.raises(CrossUserAccessError):
+        alice.delete_note(two_users["bob_note"])
+
+    assert store.get_note(conn, two_users["bob_note"], two_users["bob"]) is not None
+
+
+def test_clearing_chunks_only_clears_the_owners(conn, two_users):
+    """`clear_chunks` deletes by note id. Scoped wrongly it would take the
+    other account's vectors with it -- silently, since nothing errors."""
+    bob_before = len(store.list_chunks(conn, two_users["bob"]))
+
+    store.clear_chunks(conn, two_users["bob_note"], two_users["alice"])
+
+    assert len(store.list_chunks(conn, two_users["bob"])) == bob_before
+
+
+def test_index_status_reports_only_the_callers_notes(conn, two_users):
+    status = store.note_index_status(
+        conn, two_users["alice"], model="hash-256", chunk_size=180, chunk_overlap=40
+    )
+    assert two_users["bob_note"] not in status
+
+
+def test_editing_a_note_through_the_api_is_scoped(client, signup):
+    """The same check at the HTTP boundary, and a 404 rather than a 403 --
+    a 403 would confirm the note exists."""
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    note_id = client.post(
+        "/notes", headers={"Authorization": f"Bearer {alice}"},
+        json={"title": "Private", "body": "ALICE-SECRET"},
+    ).json()["id"]
+
+    headers = {"Authorization": f"Bearer {bob}"}
+    assert client.get(f"/notes/{note_id}", headers=headers).status_code == 404
+    assert client.patch(f"/notes/{note_id}", headers=headers, json={"title": "x"}).status_code == 404
+    assert client.delete(f"/notes/{note_id}", headers=headers).status_code == 404
+
+    # And it is still Alice's, unchanged.
+    still = client.get(f"/notes/{note_id}", headers={"Authorization": f"Bearer {alice}"}).json()
+    assert still["title"] == "Private"
+
+
 def test_indexing_one_user_does_not_touch_another(conn, provider, two_users):
     """Re-chunking Alice at a new size must leave Bob's chunks alone."""
     bob_before = {(c.id, c.text) for c in store.list_chunks(conn, two_users["bob"])}

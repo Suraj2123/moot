@@ -362,6 +362,81 @@ sync_log = Table(
 )
 
 
+decks = Table(
+    "decks",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True),
+    Column("title", String(255), nullable=False),
+    # Where the deck came from. Kept nullable and ON DELETE SET NULL rather than
+    # CASCADE: deleting the note a deck was built from should not silently
+    # destroy the studying done since. The cards carry their own provenance.
+    Column("course_id", Integer, ForeignKey("courses.id", ondelete="SET NULL")),
+    # Set when this deck is the cards declared inside one note, and kept in
+    # step with that note's text. Null for decks generated from prose.
+    Column("note_id", Integer, ForeignKey("notes.id", ondelete="SET NULL"), index=True),
+    # "note" (derived from `::` syntax, re-synced on save) or "generated"
+    # (written once by the model). The sync must never touch the latter.
+    Column("source", String(16), nullable=False, default="generated"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+cards = Table(
+    "cards",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True),
+    Column(
+        "deck_id",
+        Integer,
+        ForeignKey("decks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # The note this card was generated from. SET NULL, not CASCADE, for the
+    # same reason as above -- and because a card whose source is gone is still
+    # a card worth reviewing, it just cannot be traced any more.
+    Column("note_id", Integer, ForeignKey("notes.id", ondelete="SET NULL")),
+    Column("front", Text, nullable=False),
+    Column("back", Text, nullable=False),
+    # The sentence from the note that supports this card. This is the
+    # grounding: a card the student cannot trace back to their own material is
+    # exactly the thing this product refuses to produce elsewhere.
+    Column("evidence", Text, default=""),
+    # Identity for cards re-derived from a note on every save: a hash of the
+    # question as asked. Editing an answer keeps the card's schedule; changing
+    # the question makes a new one. Null for generated cards, which are
+    # authored once and never re-derived.
+    Column("source_key", String(32)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    # --- scheduling state (SM-2 lite; see cards.py for what it does not do) ---
+    Column("due_at", DateTime(timezone=True)),
+    Column("interval_days", Integer, nullable=False, default=0),
+    Column("ease", Integer, nullable=False, default=250),  # hundredths: 250 = 2.5
+    Column("reviews", Integer, nullable=False, default=0),
+    Column("lapses", Integer, nullable=False, default=0),
+)
+
+card_reviews = Table(
+    "card_reviews",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True),
+    Column(
+        "card_id",
+        Integer,
+        ForeignKey("cards.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # 0 forgot, 1 hard, 2 good, 3 easy. Stored per review rather than only as
+    # aggregate state on the card, so the scheduler can be changed later
+    # without having thrown away the history it would need to re-derive.
+    Column("grade", Integer, nullable=False),
+    Column("reviewed_at", DateTime(timezone=True), nullable=False),
+)
+
+
 # Tables whose rows belong to exactly one user. `errors.assert_owned` checks
 # membership here before trusting a caller-supplied id.
 USER_OWNED_TABLES = {
@@ -371,4 +446,6 @@ USER_OWNED_TABLES = {
     "chunks": chunks,
     "eval_labels": eval_labels,
     "work_sessions": work_sessions,
+    "decks": decks,
+    "cards": cards,
 }
