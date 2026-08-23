@@ -42,7 +42,9 @@ from . import auth as auth_module
 from . import cards as cards_module
 from . import credentials
 from . import documents
+from . import modelkeys
 from . import outline
+from . import vault
 from . import jobs as jobs_module
 from . import preflight
 from . import usage as usage_module
@@ -234,6 +236,10 @@ class DeckIn(BaseModel):
 
 class DeckPatchIn(BaseModel):
     visibility: str
+
+
+class ModelKeyIn(BaseModel):
+    api_key: str
 
 
 class ReviewIn(BaseModel):
@@ -913,6 +919,80 @@ def usage_summary(app: StudyLink = Depends(current_app)) -> dict:
         "remaining_usd": round(
             usage_module.remaining_micros(app.conn, app.user_id) / 1_000_000, 6
         ) if limit else None,
+    }
+
+
+@api.get("/model-key")
+def model_key_status(app: StudyLink = Depends(current_app)) -> dict:
+    """Whether this account has its own model key, and which one.
+
+    Returns a four-character hint, never the key. There is no read path in this
+    API that returns one -- the only decryption happens inside the code about
+    to make a call with it.
+    """
+    status = modelkeys.get_status(app.conn, app.user_id)
+    return {
+        "connected": status is not None,
+        **(status.as_dict() if status else {}),
+        "vault_configured": vault.is_configured(),
+    }
+
+
+@api.post("/model-key", status_code=201)
+def save_model_key(
+    payload: ModelKeyIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Store your own Anthropic key, so generation costs this service nothing.
+
+    The key is encrypted the same way a Canvas token is, bound to this account
+    by the vault's associated data, and the monthly allowance stops applying --
+    it exists to cap what the operator pays for, and this account is no longer
+    spending that.
+    """
+    try:
+        status = modelkeys.save_key(app.conn, app.user_id, payload.api_key)
+    except modelkeys.ModelKeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"connected": True, **status.as_dict()}
+
+
+@api.delete("/model-key", status_code=204)
+def delete_model_key(app: StudyLink = Depends(current_app)) -> Response:
+    modelkeys.delete_key(app.conn, app.user_id)
+    return Response(status_code=204)
+
+
+@api.get("/pricing")
+def pricing(app: StudyLink = Depends(current_app)) -> dict:
+    """What costs money here and what does not.
+
+    An endpoint rather than a hardcoded page, because the honest answer depends
+    on this deployment: whether the operator configured a key at all, whether
+    this account brought its own, and what is left of the allowance. A page
+    that claims "free" while the allowance is exhausted would be a page nobody
+    should believe.
+    """
+    own_key = modelkeys.get_status(app.conn, app.user_id) is not None
+    limit = usage_module.budget_micros()
+    spend = usage_module.spend_since(app.conn, app.user_id)
+    return {
+        "free": [
+            "Writing cards in a note with :: -- the whole outline syntax",
+            "Spaced repetition, practice tests, and progress",
+            "Uploading and reading PDFs, Word files, and Markdown",
+            "Publishing decks, searching public decks, and forking them",
+            "Canvas sync and assignment matching",
+        ],
+        "paid": [
+            "Writing cards from prose you did not mark up",
+            "Asking questions of your notes",
+            "Work sessions on an assignment",
+        ],
+        "own_key": own_key,
+        "budget_usd": round(limit / 1_000_000, 2) if limit else None,
+        "spent_usd": spend.dollars,
+        # With their own key the allowance is not the thing that stops them.
+        "capped": bool(limit) and not own_key,
     }
 
 

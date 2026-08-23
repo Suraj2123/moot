@@ -373,10 +373,20 @@ class CardWriter:
     """Turns one note into candidate cards. The only part of this file that
     spends money."""
 
-    def __init__(self, client=None, model: str = AGENT_MODEL, max_tokens: int = 2000):
+    def __init__(
+        self,
+        client=None,
+        model: str = AGENT_MODEL,
+        max_tokens: int = 2000,
+        api_key: Optional[str] = None,
+    ):
         self.model = model
         self.max_tokens = max_tokens
         self._client = client
+        # A key belonging to the student rather than to the deployment. When
+        # present the call is billed to them, which is what makes generation
+        # free for whoever runs this. None means fall back to the environment.
+        self._api_key = api_key
 
     @property
     def client(self):
@@ -388,10 +398,16 @@ class CardWriter:
                     "The `anthropic` package is not installed."
                 ) from exc
             try:
-                self._client = anthropic.Anthropic()
+                self._client = (
+                    anthropic.Anthropic(api_key=self._api_key)
+                    if self._api_key
+                    else anthropic.Anthropic()
+                )
             except Exception as exc:
                 raise GenerationUnavailable(
-                    "No Anthropic credentials found. Set ANTHROPIC_API_KEY."
+                    "No Anthropic key available. Add your own in Settings, or "
+                    "write cards yourself with `::` in a note -- that is free "
+                    "and needs no key at all."
                 ) from exc
         return self._client
 

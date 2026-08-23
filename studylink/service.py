@@ -17,7 +17,7 @@ from sqlalchemy import Connection, func, select
 from . import cards as cards_module
 from . import outline as outline_module
 from . import progress as progress_module
-from . import credentials, schema, store
+from . import credentials, modelkeys, schema, store
 from . import usage as usage_module
 from .agent import WorkSessionAgent
 from .canvas import CanvasClient, CanvasError, SyncResult, sync_all
@@ -280,8 +280,15 @@ class StudyLink:
         if note is None:  # pragma: no cover - assert_owned already raised
             raise NotFoundError("notes", note_id)
 
-        usage_module.check_budget(self.conn, self.user_id)
-        writer = writer or cards_module.CardWriter()
+        own_key = modelkeys.get_key(self.conn, self.user_id)
+        if own_key is None:
+            # The allowance exists to cap what the operator pays for. Someone
+            # spending their own key is not spending it, so there is nothing
+            # for the cap to protect and it does not apply -- which is the
+            # entire point of letting them bring one.
+            usage_module.check_budget(self.conn, self.user_id)
+
+        writer = writer or cards_module.CardWriter(api_key=own_key)
         generated = writer.write(note.title, note.body, count=count)
 
         if generated.usage:

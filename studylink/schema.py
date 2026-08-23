@@ -132,6 +132,40 @@ canvas_credentials = Table(
 )
 
 
+# One row per user who has supplied their own model API key. Same shape and
+# same rules as canvas_credentials: encrypted by `vault`, never readable
+# through the API, never in a log line.
+#
+# This table is what makes "free" true rather than aspirational. The one paid
+# feature in the app is generating cards from prose; a user who brings their
+# own key pays their own provider directly, the operator's bill does not grow
+# with usage, and the monthly cap that exists to protect the operator stops
+# applying to them.
+model_credentials = Table(
+    "model_credentials",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # "anthropic" today. A column rather than an assumption, because the local
+    # provider this is meant to sit beside will need its own row.
+    Column("provider", String(32), nullable=False),
+    Column("encrypted_key", Text, nullable=False),
+    Column("key_version", String(16), nullable=False),
+    # The last four characters, so the UI can show *which* key is stored
+    # without being able to show the key. Four is enough to recognise and far
+    # too few to use.
+    Column("hint", String(8), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("user_id", "provider", name="user_provider"),
+)
+
+
 # Background work: indexing and Canvas sync, which are both too slow to hold a
 # request open for. Rows are the queue and the audit trail at once.
 jobs = Table(
