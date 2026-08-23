@@ -1,17 +1,34 @@
 # moot
 
-A notes app that connects to Canvas, automatically maps your notes and lecture
-material to the assignments they're relevant to, and turns matched notes into a
-working draft or study plan — powered by retrieval (RAG) and an AI agent, not
-manual searching.
+**Your notes are your flashcards.** Write them as an outline, mark what should be
+asked with `term :: definition`, and those lines become a spaced-repetition deck
+that stays in step with the note as you edit it. Free, offline by default, MIT
+licensed.
+
+Quizlet's study modes and sharing, RemNote's notes-are-cards authoring, an
+Anki-style scheduler — with no paywall on any of it.
 
 ## Why
 
-Notes end up scattered across a semester — different courses, different formats,
-no link back to the assignment they actually apply to. moot closes that gap:
-pull assignments from Canvas, embed your notes, semantically match them, **measure
-how good the matching actually is**, and use an agent to synthesise matched notes
-plus assignment context into something you can start working from.
+Making flashcards is a second act of writing. You take the note, then you type
+the same material again in a different app, and the two drift apart the moment
+you learn something new. So most people stop making cards, or stop updating
+their notes.
+
+moot removes the second step: the note *is* the deck. Mark a line and it becomes
+a card; fix a typo in the answer and the card keeps its review history; delete
+the line and the card goes with it.
+
+Everything a student does daily runs with no API key and no network call —
+writing cards, reviewing, practice tests, progress, publishing a deck, searching
+other people's. One feature calls a paid model (writing cards from prose you did
+not mark up) and it has a free alternative that does the same job by hand. See
+docs/PRICING.md.
+
+It also connects to Canvas, if you want it to: pull your assignments, and moot
+will tell you which of your notes bear on which assignment, with the evidence
+for each match and a measured claim about how good that matching actually is.
+That started as the whole product and is now an optional integration.
 
 ## Quick start
 
@@ -115,6 +132,22 @@ real data later. Practice tests are assembled from cards that already exist and
 cost nothing: the wrong options are other answers from the same deck, which are
 genuinely confusable in a way invented ones are not.
 
+**Share a deck, or take someone else's** — publish a deck to a link anyone can
+open with no account, or list it in Discover where it can be found by topic.
+Search is semantic and runs on the same offline embedding index as everything
+else, so it needs no API key: "the powerhouse of the cell" finds a deck called
+"Bio 101 midterm". Copying one gives you your own private deck with no review
+history, because a schedule is a claim about someone else's memory. A shared
+card carries its question and answer and nothing else -- not the sentence it
+quoted from the owner's note, not when they last saw it. See docs/SHARING.md.
+
+**Free without an asterisk** — every daily feature works with no API key and no
+network: writing cards, reviewing, tests, progress, upload, sharing, discovery.
+Three features call a model, and a student can point them at their own
+Anthropic key, stored encrypted exactly like a Canvas token, which lifts the
+monthly allowance because that allowance exists to cap what the operator pays
+for. docs/PRICING.md says who pays for what and what the free path gives up.
+
 **Agent work sessions** — pick an assignment, get matched notes pulled
 automatically, and an agent produces a study outline, draft skeleton, or concept
 summary, citing `[N<id>]` inline. A traceability check flags any note id the agent
@@ -158,6 +191,8 @@ usage             per-user LLM cost ledger and monthly cap
 cards             flashcard generation, SM-2 lite scheduling, practice tests
 outline           RemNote-style note syntax -> cards, with stable identities
 progress          mastery states, smoothed weak-card ranking, streaks
+slugs             short public ids for anything shared by link
+modelkeys         a user's own API key, encrypted, never readable back
 llm               turns a failed model call into a sentence, not a 500
 evaluation        labelled set, metrics, LLM judge, config sweep
 service           the facade the UI, API, and scripts all drive
@@ -197,7 +232,7 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-602 tests, no network, no API keys. Twenty-two more cover the Postgres and
+692 tests, no network, no API keys. Twenty-two more cover the Postgres and
 pgvector paths and skip unless you point them at a server:
 
 ```bash
@@ -222,6 +257,10 @@ covered and the path that produces it in production is not.
   there is no approximate index, and the measurements that would change that.
 - `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
   decisions behind it.
+- `docs/SHARING.md` -- the three visibility states, what a shared card does and
+  does not carry, and why unlisted is a different permission from public.
+- `docs/PRICING.md` -- what costs money, who pays it, and what the free path
+  is worse at.
 - `docs/DEPLOY.md` -- what has to run in production, the two configs shipped
   (Fly and Railway), the Render walkthrough, and what preflight refuses to boot
   with.
@@ -248,6 +287,11 @@ Working MVP.
 - [x] Flashcards and practice tests generated from notes, with grounding checks
 - [x] RemNote-style outline notes that declare their own cards, synced on save
 - [x] Progress scoring: mastery states, streaks, and what needs more practice
+- [x] Public and unlisted decks, semantic deck discovery, and forking
+- [x] Bring-your-own-key, so the paid features cost the operator nothing
+- [ ] Import and export (Anki .apkg, Quizlet paste, CSV)
+- [ ] Learn mode and Match
+- [ ] Offline review on a phone (PWA + IndexedDB)
 - [ ] Lecture audio -> transcript via Whisper (pipeline accepts transcripts already)
 - [ ] Google Classroom as a second integration
 - [x] Background indexing and Canvas sync, off the request path

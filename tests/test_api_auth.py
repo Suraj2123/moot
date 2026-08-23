@@ -104,7 +104,19 @@ PUBLIC_PATHS = {"/auth/signup", "/auth/login", "/auth/logout",
                 "/", "/app/{path:path}",
                 # Probes. A load balancer has no credentials, and these report
                 # only whether dependencies answer -- never anything about data.
-                "/healthz", "/readyz"}
+                "/healthz", "/readyz",
+                # A shared deck. The one route here that reads user-created
+                # content without a session, and therefore the one that had to
+                # be argued for rather than listed: a share link that opens a
+                # sign-in wall is not a share link.
+                #
+                # What makes it safe is not authentication but the query. It
+                # matches on `visibility IN ('public', 'unlisted')`, so a
+                # private deck is not refused -- it is not found, which is the
+                # same answer a deck that never existed gets. See
+                # test_sharing.py and the sharing section of test_isolation.py,
+                # which cover that boundary in both directions.
+                "/d/{slug}"}
 
 
 def concrete(path: str) -> str:
