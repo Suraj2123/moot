@@ -313,9 +313,10 @@ export const FORGOT = 0, HARD = 1, GOOD = 2, EASY = 3;
 export const decks = {
   list: () => api.get<Deck[]>("/decks"),
   get: (id: number) => api.get<DeckDetail>(`/decks/${id}`),
-  create: (note_id: number, count = 10, title?: string) =>
+  /** `count` is a ceiling; omit it and the note decides how many it supports. */
+  create: (note_id: number, count?: number, title?: string) =>
     api.post<{ deck_id: number; cards: number; rejected: number }>(
-      "/decks", { note_id, count, title: title ?? null },
+      "/decks", { note_id, count: count ?? null, title: title ?? null },
     ),
   remove: (id: number) => api.del<void>(`/decks/${id}`),
   study: (id: number) => api.get<Card[]>(`/decks/${id}/study`),

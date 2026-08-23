@@ -252,9 +252,44 @@ Return JSON only, of the form:
 """
 
 
+# One card per this many sentences of note. Two, because a card is usually a
+# claim plus the context that makes it answerable, and asking for one card per
+# sentence produces a deck that quizzes the same idea from four angles.
+SENTENCES_PER_CARD = 2
+
+
+def suggest_count(body: str) -> int:
+    """How many cards this note can support, from the note itself.
+
+    The old flow asked the student for a number and then asked the model for
+    exactly that many. That has it backwards: they cannot know how many ideas
+    are in a note they just wrote, and the number they pick becomes a target
+    the model pads out to. Ask for ten cards from three sentences and you get
+    ten cards, seven of which restate each other -- and every one of those has
+    to be reviewed forever.
+
+    So the note decides. Counting sentences is crude, but it is the right kind
+    of crude: it tracks how much the student actually wrote, it cannot be
+    gamed, and it needs no second model call to estimate.
+    """
+    text = (body or "").strip()
+    if not text:
+        return 0
+    # Splitting on terminators and newlines: notes are full of lines that end
+    # without punctuation, and each of those is its own point.
+    parts = [p for p in re.split(r"(?<=[.!?])\s+|\n+", text) if len(p.strip()) > 15]
+    sentences = len(parts)
+    if sentences == 0:
+        return 1
+    return max(1, min(MAX_CARDS_PER_NOTE, round(sentences / SENTENCES_PER_CARD)))
+
+
 def build_prompt(title: str, body: str, count: int) -> str:
     return (
-        f"Write up to {count} flashcards from this note.\n\n"
+        f"Write flashcards from this note -- at most {count}, and fewer if the "
+        "note holds fewer ideas worth asking about. The limit is a ceiling, not "
+        "a target: a note with three ideas should produce three cards. Never "
+        "split one idea across several cards to reach a number.\n\n"
         f"Title: {title}\n\n"
         f"<note>\n{body}\n</note>"
     )
@@ -360,12 +395,14 @@ class CardWriter:
                 ) from exc
         return self._client
 
-    def write(self, title: str, body: str, count: int = 10) -> Generated:
+    def write(self, title: str, body: str, count: Optional[int] = None) -> Generated:
+        """Cards from a note. `count` is a ceiling; None lets the note set it."""
         if len((body or "").strip()) < MIN_NOTE_CHARS:
             raise CardError(
                 "That note is too short to make cards from. Add more detail, or "
                 "write the cards yourself."
             )
+        count = suggest_count(body) if count is None else count
         count = max(1, min(count, MAX_CARDS_PER_NOTE))
 
         with llm.upstream(GenerationUnavailable):

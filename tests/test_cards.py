@@ -125,7 +125,7 @@ def test_the_requested_count_is_capped():
     writer = cards.CardWriter(client=FakeClient(reply_with(("Q?", "A", NOTE[:40]))))
     writer.write("Lecture 4", NOTE, count=500)
     prompt = writer._client.calls[0]["messages"][0]["content"]
-    assert f"up to {cards.MAX_CARDS_PER_NOTE} flashcards" in prompt
+    assert f"at most {cards.MAX_CARDS_PER_NOTE}" in prompt
 
 
 # -------------------------------------------------------------------- parsing
@@ -265,3 +265,73 @@ def test_an_empty_deck_is_refused():
 )
 def test_written_answers_are_graded_forgivingly_but_honestly(given, expected, verdict):
     assert cards.grade_written(given, expected) == verdict
+
+
+# ------------------------------------------------------- how many to write
+
+
+class TestSuggestCount:
+    """The number of cards is a property of the note, not a number typed by
+    someone who has not counted the ideas in what they just wrote.
+
+    The old flow asked for a count and handed it straight to the model, which
+    dutifully padded a three-sentence note out to ten cards. Padding is not a
+    cosmetic problem: every redundant card is then reviewed forever.
+    """
+
+    def test_a_short_note_gets_few_cards(self):
+        assert cards.suggest_count(NOTE) == 2
+
+    def test_a_longer_note_gets_more(self):
+        longer = NOTE + " " + " ".join(
+            f"Concept number {n} is defined as something worth knowing."
+            for n in range(20)
+        )
+        assert cards.suggest_count(longer) > cards.suggest_count(NOTE)
+
+    def test_it_never_exceeds_the_cap(self):
+        body = " ".join(f"Fact {n} is that this sentence exists." for n in range(200))
+        assert cards.suggest_count(body) == cards.MAX_CARDS_PER_NOTE
+
+    def test_outline_lines_count_even_without_punctuation(self):
+        """Notes are full of lines that end without a full stop, and each of
+        those is its own point -- splitting on sentence terminators alone reads
+        a whole outline as a single idea."""
+        outline_note = "\n".join([
+            "Learning rate controls the step size",
+            "Momentum accumulates a velocity vector",
+            "Batch norm rescales activations",
+            "Dropout randomly zeroes units during training",
+        ])
+        assert cards.suggest_count(outline_note) == 2
+
+    def test_an_empty_note_asks_for_nothing(self):
+        assert cards.suggest_count("") == 0
+        assert cards.suggest_count("   \n  ") == 0
+
+    def test_fragments_do_not_inflate_the_count(self):
+        """Stray initials and "etc." are not ideas worth a card each."""
+        assert cards.suggest_count("A. B. C. D. E.") == 1
+
+
+class TestTheNoteSetsTheCount:
+    def test_no_count_given_means_the_note_decides(self):
+        writer = cards.CardWriter(client=FakeClient(reply_with(("Q?", "A", NOTE[:40]))))
+        writer.write("Lecture 4", NOTE)
+        prompt = writer._client.calls[0]["messages"][0]["content"]
+        assert f"at most {cards.suggest_count(NOTE)}" in prompt
+
+    def test_an_explicit_count_is_still_honoured(self):
+        """The ceiling is still settable -- the change is what happens when
+        nobody sets one, not the removal of the knob."""
+        writer = cards.CardWriter(client=FakeClient(reply_with(("Q?", "A", NOTE[:40]))))
+        writer.write("Lecture 4", NOTE, count=3)
+        prompt = writer._client.calls[0]["messages"][0]["content"]
+        assert "at most 3" in prompt
+
+    def test_the_prompt_says_the_limit_is_a_ceiling(self):
+        """A model asked for "10 flashcards" writes 10. Asked for "at most 10,
+        fewer if the note holds fewer", it writes what is actually there."""
+        prompt = cards.build_prompt("Lecture", "Some body text.", 8)
+        assert "at most 8" in prompt
+        assert "ceiling, not a target" in prompt

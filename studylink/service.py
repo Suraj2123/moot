@@ -263,7 +263,8 @@ class StudyLink:
     # --------------------------------------------------------------------- cards
 
     def make_deck_from_note(
-        self, note_id: int, count: int = 10, title: Optional[str] = None, writer=None
+        self, note_id: int, count: Optional[int] = None,
+        title: Optional[str] = None, writer=None,
     ) -> dict:
         """Generate a deck of flashcards from one note.
 

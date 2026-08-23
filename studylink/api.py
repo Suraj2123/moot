@@ -226,7 +226,9 @@ class PasswordChangeIn(BaseModel):
 
 class DeckIn(BaseModel):
     note_id: int
-    count: int = Field(default=10, ge=1, le=20)
+    # A ceiling, not a target, and omitting it is the normal case: the note
+    # decides how many cards it can support. See cards.suggest_count.
+    count: Optional[int] = Field(default=None, ge=1, le=20)
     title: Optional[str] = None
 
 
