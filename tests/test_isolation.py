@@ -249,3 +249,249 @@ def test_indexing_one_user_does_not_touch_another(conn, provider, two_users):
 
     bob_after = {(c.id, c.text) for c in store.list_chunks(conn, two_users["bob"])}
     assert bob_before == bob_after
+
+
+# ----------------------------------------------------------------- sharing
+
+
+"""Sharing is where isolation gets genuinely hard.
+
+Everywhere else in this app the rule is simple -- scope by user_id, return 404
+otherwise. A public deck breaks that rule deliberately: it is one row read by
+someone who is not its owner and may not be anyone at all. So the tests below
+are not "does the WHERE clause exist" but "does exactly the right amount leak".
+"""
+
+
+def auth(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def make_deck(client, token, title="Cell biology", body=None):
+    body = body or "mitochondrion :: the powerhouse of the cell\nribosome :: builds proteins"
+    client.post("/notes", json={"title": title, "body": body}, headers=auth(token))
+    return client.get("/decks", headers=auth(token)).json()[0]
+
+
+def test_a_private_deck_is_invisible_to_a_stranger(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    assert deck["visibility"] == "private"
+    assert client.get(f"/d/{deck['slug']}").status_code == 404
+
+
+def test_a_private_deck_is_invisible_to_another_signed_in_user(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+
+    assert client.get(f"/d/{deck['slug']}", headers=auth(bob)).status_code == 404
+    assert client.get(f"/decks/{deck['id']}", headers=auth(bob)).status_code == 404
+    assert client.patch(
+        f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(bob)
+    ).status_code == 404
+
+
+def test_only_the_owner_can_publish(client, signup):
+    """The check that matters most: publishing someone else's notes."""
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(bob))
+    assert client.get(f"/d/{deck['slug']}").status_code == 404
+
+
+def test_a_public_deck_is_readable_by_nobody_in_particular(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    response = client.get(f"/d/{deck['slug']}")
+    assert response.status_code == 200
+    assert {c["front"] for c in response.json()["cards"]} == {"mitochondrion", "ribosome"}
+
+
+def test_a_shared_card_carries_only_the_question_and_answer(client, signup):
+    """The structural guarantee, asserted on the shape rather than on a sample.
+
+    `evidence` quotes the source note verbatim -- for a generated card, a whole
+    sentence of it -- and scheduling state describes the owner's memory rather
+    than the deck. Neither belongs on a page anyone can open. Checking the key
+    set rather than searching for a canary means a column added later cannot
+    quietly join the payload.
+    """
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    for card in client.get(f"/d/{deck['slug']}").json()["cards"]:
+        assert set(card) == {"id", "front", "back"}
+
+
+def test_the_rest_of_the_note_does_not_come_with_the_deck(client, signup):
+    """A line that declares no card is not part of the deck, and publishing the
+    deck must not publish it."""
+    alice = signup(client, email="alice@school.edu")
+    client.post(
+        "/notes",
+        json={
+            "title": "Biology",
+            "body": "My tutor ALICE-PRIVATE said the exam is rigged.\nmitochondrion :: powerhouse",
+        },
+        headers=auth(alice),
+    )
+    deck = client.get("/decks", headers=auth(alice)).json()[0]
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    assert "ALICE-PRIVATE" not in client.get(f"/d/{deck['slug']}").text
+
+
+def test_a_shared_deck_does_not_carry_the_owners_email(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+    assert "alice@school.edu" not in client.get(f"/d/{deck['slug']}").text
+
+
+def test_an_unlisted_deck_is_reachable_by_link_and_absent_from_search(client, signup):
+    """The whole meaning of "unlisted": a link is not a listing."""
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "unlisted"}, headers=auth(alice))
+
+    assert client.get(f"/d/{deck['slug']}").status_code == 200
+    assert client.get("/discover", headers=auth(bob)).json() == []
+    found = client.get("/discover?q=mitochondrion", headers=auth(bob)).json()
+    assert found == []
+
+
+def test_making_a_deck_private_again_removes_it_from_search(client, signup):
+    """Withdrawing consent has to take effect in the same request. A deck that
+    stays findable for a minute after being made private is a deck that leaked."""
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+    assert client.get("/discover?q=mitochondrion", headers=auth(bob)).json()
+
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "private"}, headers=auth(alice))
+    assert client.get("/discover?q=mitochondrion", headers=auth(bob)).json() == []
+    assert client.get(f"/d/{deck['slug']}").status_code == 404
+
+
+def test_forking_copies_the_cards_into_the_forkers_account(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    forked = client.post(f"/d/{deck['slug']}/fork", headers=auth(bob))
+    assert forked.status_code == 201
+    assert forked.json()["forked_from_id"] == deck["id"]
+
+    bobs = client.get("/decks", headers=auth(bob)).json()
+    assert [d["title"] for d in bobs] == ["Cell biology"]
+    assert bobs[0]["cards"] == 2
+    # Bob's copy is his own deck, private until he says otherwise.
+    assert bobs[0]["visibility"] == "private"
+    assert bobs[0]["slug"] != deck["slug"]
+
+
+def test_a_fork_starts_unstudied(client, signup):
+    """Alice's schedule is a claim about Alice's memory. It does not transfer."""
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    queue = client.get(f"/decks/{deck['id']}/study", headers=auth(alice)).json()
+    for card in queue:
+        client.post(f"/cards/{card['id']}/review", json={"grade": 3}, headers=auth(alice))
+
+    client.post(f"/d/{deck['slug']}/fork", headers=auth(bob))
+    bobs_deck = client.get("/decks", headers=auth(bob)).json()[0]
+    assert bobs_deck["due"] == 2, "a forked card has never been seen by its new owner"
+
+    for card in client.get(f"/decks/{bobs_deck['id']}/study", headers=auth(bob)).json():
+        assert card["reviews"] == 0
+        assert card["interval_days"] == 0
+
+
+def test_a_fork_does_not_carry_evidence_across(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    client.post(
+        "/notes",
+        json={"title": "Bio", "body": "ALICE-PRIVATE context here. mitochondrion :: powerhouse"},
+        headers=auth(alice),
+    )
+    deck = client.get("/decks", headers=auth(alice)).json()[0]
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    client.post(f"/d/{deck['slug']}/fork", headers=auth(bob))
+    bobs_deck = client.get("/decks", headers=auth(bob)).json()[0]
+    cards = client.get(f"/decks/{bobs_deck['id']}/study", headers=auth(bob)).json()
+    assert all("ALICE-PRIVATE" not in (c.get("evidence") or "") for c in cards)
+
+
+def test_forking_your_own_deck_works(client, signup):
+    """Not a special case worth forbidding -- it is how someone resets a deck
+    they have over-studied without losing the original."""
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+
+    assert client.post(f"/d/{deck['slug']}/fork", headers=auth(alice)).status_code == 201
+    assert len(client.get("/decks", headers=auth(alice)).json()) == 2
+
+
+def test_a_private_deck_cannot_be_forked(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    deck = make_deck(client, alice)
+
+    assert client.post(f"/d/{deck['slug']}/fork", headers=auth(bob)).status_code == 404
+    assert client.get("/decks", headers=auth(bob)).json() == []
+
+
+def test_forking_requires_a_session(client, signup):
+    """Reading a shared deck is anonymous. Copying one into an account is not."""
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    client.patch(f"/decks/{deck['id']}", json={"visibility": "public"}, headers=auth(alice))
+    assert client.post(f"/d/{deck['slug']}/fork").status_code == 401
+
+
+def test_discover_never_returns_another_users_private_deck(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    bob = signup(client, email="bob@school.edu")
+    make_deck(client, alice, body="ALICE-SECRET :: never published")
+
+    assert client.get("/discover", headers=auth(bob)).json() == []
+    assert "ALICE-SECRET" not in client.get("/discover?q=secret", headers=auth(bob)).text
+
+
+def test_slugs_are_not_guessable_from_ids(client, signup):
+    """A sequential id in a share URL says how many decks the service holds and
+    invites walking the range."""
+    alice = signup(client, email="alice@school.edu")
+    deck = make_deck(client, alice)
+    assert deck["slug"] != str(deck["id"])
+    assert len(deck["slug"]) >= 8
+    assert client.get(f"/d/{deck['id']}").status_code == 404
+
+
+def test_every_deck_gets_a_distinct_slug(client, signup):
+    alice = signup(client, email="alice@school.edu")
+    for n in range(6):
+        client.post(
+            "/notes", json={"title": f"Deck {n}", "body": f"term{n} :: definition{n}"},
+            headers=auth(alice),
+        )
+    slugs = [d["slug"] for d in client.get("/decks", headers=auth(alice)).json()]
+    assert len(slugs) == 6
+    assert len(set(slugs)) == 6
+    assert all(s for s in slugs)
