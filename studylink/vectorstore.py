@@ -21,7 +21,7 @@ from sqlalchemy.exc import DBAPIError
 
 from .db import transaction
 from .pgvector_support import has_vector_column, to_vector_param
-from .schema import assignments, chunks, embeddings
+from .schema import assignments, chunks, decks, embeddings
 
 
 def _to_blob(vector: np.ndarray) -> bytes:
@@ -36,7 +36,7 @@ def _from_blob(blob: bytes) -> np.ndarray:
 # column of its own -- ownership lives on the row the vector describes. Every
 # read joins through this map, so there is no code path that can return a vector
 # without having proved who owns it.
-_OWNER_TABLES = {"chunk": chunks, "assignment": assignments}
+_OWNER_TABLES = {"chunk": chunks, "assignment": assignments, "deck": decks}
 
 
 def _stable_order(results: list[tuple[int, float]]) -> list[tuple[int, float]]:
@@ -294,3 +294,83 @@ class VectorStore:
             )
         ).first()
         return int(row[0])
+
+
+class PublicDeckIndex:
+    """Search over decks their owners chose to publish.
+
+    Every other search in this file is scoped by `user_id`, and the comment on
+    `_search_native` says that join must never be dropped. This class exists so
+    that rule does not have to be bent: it is a separate entry point with a
+    different, equally hard predicate -- `decks.visibility == 'public'` -- and
+    no way to ask it for anything else.
+
+    Two things follow from that being a class rather than a `user_id=None` flag
+    on `search`. A reader cannot reach the unscoped path by passing a falsy
+    value, and a reviewer looking at a call site can tell which set is being
+    searched from the name alone.
+
+    Unlisted decks are absent on purpose. "Anyone with the link" is a different
+    permission from "anyone who searches", and returning one here would quietly
+    convert the first into the second.
+    """
+
+    OWNER_TYPE = "deck"
+    VISIBLE = "public"
+
+    def __init__(self, conn: Connection) -> None:
+        self.conn = conn
+        self.store = VectorStore(conn)
+
+    def upsert(self, deck_id: int, vector: np.ndarray, model: str) -> None:
+        self.store.upsert_many(self.OWNER_TYPE, [deck_id], np.asarray([vector]), model)
+
+    def forget(self, deck_id: int) -> None:
+        """Drop a deck's vector -- called when it stops being public.
+
+        Leaving it would keep the deck findable after its owner made it
+        private, which is the whole failure this feature has to not have.
+        """
+        self.store.delete(self.OWNER_TYPE, [deck_id])
+
+    def search(
+        self, query: np.ndarray, model: str, top_k: int = 20
+    ) -> list[tuple[int, float]]:
+        if has_vector_column(self.conn):
+            distance = embeddings.c.embedding.cosine_distance(to_vector_param(query))
+            rows = self.conn.execute(
+                select(embeddings.c.owner_id, (1 - distance).label("score"))
+                .join(decks, decks.c.id == embeddings.c.owner_id)
+                .where(
+                    embeddings.c.owner_type == self.OWNER_TYPE,
+                    embeddings.c.model == model,
+                    decks.c.visibility == self.VISIBLE,
+                )
+                .order_by(distance)
+                .limit(top_k)
+            ).all()
+            return _stable_order([(int(i), float(s)) for i, s in rows])
+
+        rows = self.conn.execute(
+            select(embeddings.c.owner_id, embeddings.c.vector)
+            .join(decks, decks.c.id == embeddings.c.owner_id)
+            .where(
+                embeddings.c.owner_type == self.OWNER_TYPE,
+                embeddings.c.model == model,
+                decks.c.visibility == self.VISIBLE,
+            )
+            .order_by(embeddings.c.owner_id)
+        ).all()
+        if not rows:
+            return []
+
+        ids = [int(row[0]) for row in rows]
+        matrix = np.vstack([_from_blob(row[1]) for row in rows])
+        if matrix.shape[1] != query.shape[0]:
+            raise ValueError(
+                f"Dimension mismatch: stored vectors are {matrix.shape[1]}-d but the "
+                f"query is {query.shape[0]}-d. Re-index after changing embedding models."
+            )
+        scores = matrix @ np.asarray(query, dtype=np.float32)
+        order = np.lexsort((np.asarray(ids), -scores))
+        return [(ids[int(i)], float(scores[int(i)])) for i in order[:top_k]]

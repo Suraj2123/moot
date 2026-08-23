@@ -31,9 +31,11 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from . import slugs
 from .db import transaction
 from .models import Assignment, Chunk, Course, Note
 from .schema import (
@@ -769,16 +771,49 @@ def last_sync(conn: Connection, user_id: Optional[int] = None) -> Optional[dict]
 # ------------------------------------------------------------------------ cards
 
 
+# Tries before giving up on a unique slug. Three is plenty: each attempt is
+# independent, so the chance of three collisions in a row is the per-attempt
+# probability cubed.
+_SLUG_ATTEMPTS = 3
+
+
 def create_deck(
-    conn: Connection, user_id: int, title: str, course_id: Optional[int] = None
+    conn: Connection,
+    user_id: int,
+    title: str,
+    course_id: Optional[int] = None,
+    **extra,
 ) -> int:
-    with transaction(conn):
-        result = conn.execute(
-            insert(decks).values(
-                user_id=user_id, title=title, course_id=course_id, created_at=_now()
-            )
-        )
-    return int(result.inserted_primary_key[0])
+    """A new deck, private, with a public slug already assigned.
+
+    The slug is written now rather than when the deck is first shared. Sharing
+    is a switch someone flips expecting a link immediately, and generating an
+    identifier at that moment means a write, a uniqueness retry, and a failure
+    mode on the one interaction that has to feel instant.
+
+    Retries on collision instead of trusting the odds. Ten random characters
+    collide about once in 300 at a million decks, which is rare enough to never
+    see in testing and common enough to happen to a real person.
+    """
+    for attempt in range(_SLUG_ATTEMPTS):
+        try:
+            with transaction(conn):
+                result = conn.execute(
+                    insert(decks).values(
+                        user_id=user_id,
+                        title=title,
+                        course_id=course_id,
+                        slug=slugs.new_slug(),
+                        visibility="private",
+                        created_at=_now(),
+                        **extra,
+                    )
+                )
+            return int(result.inserted_primary_key[0])
+        except IntegrityError:
+            if attempt == _SLUG_ATTEMPTS - 1:
+                raise
+    raise AssertionError("unreachable")
 
 
 def add_cards(conn: Connection, user_id: int, deck_id: int, drafts: Iterable) -> list[int]:
@@ -814,6 +849,9 @@ def _deck_from_row(row) -> dict:
         "title": row["title"],
         "course_id": row["course_id"],
         "created_at": _iso(row["created_at"]),
+        "visibility": row["visibility"] if "visibility" in row else "private",
+        "slug": row["slug"] if "slug" in row else None,
+        "forked_from_id": row["forked_from_id"] if "forked_from_id" in row else None,
     }
 
 
@@ -830,6 +868,9 @@ def list_decks(conn: Connection, user_id: int) -> list[dict]:
             decks.c.title,
             decks.c.course_id,
             decks.c.created_at,
+            decks.c.visibility,
+            decks.c.slug,
+            decks.c.forked_from_id,
             func.count(cards.c.id).label("total"),
             func.sum(
                 case(((cards.c.due_at.is_(None)) | (cards.c.due_at <= _now()), 1), else_=0)
@@ -837,7 +878,10 @@ def list_decks(conn: Connection, user_id: int) -> list[dict]:
         )
         .select_from(decks.outerjoin(cards, cards.c.deck_id == decks.c.id))
         .where(decks.c.user_id == user_id)
-        .group_by(decks.c.id, decks.c.title, decks.c.course_id, decks.c.created_at)
+        .group_by(
+            decks.c.id, decks.c.title, decks.c.course_id, decks.c.created_at,
+            decks.c.visibility, decks.c.slug, decks.c.forked_from_id,
+        )
         .order_by(decks.c.created_at.desc())
     ).mappings()
     return [
@@ -990,14 +1034,12 @@ def sync_note_cards(
                 update(decks).where(decks.c.id == deck_id).values(title=title)
             )
     else:
-        with transaction(conn):
-            result = conn.execute(
-                insert(decks).values(
-                    user_id=user_id, title=title, note_id=note_id,
-                    source="note", created_at=now,
-                )
-            )
-        deck_id = int(result.inserted_primary_key[0])
+        # Through create_deck, not a bare insert: that is where a deck gets its
+        # public slug, and a deck without one cannot ever be shared. A note's
+        # own deck is the most likely thing a student wants to send someone.
+        deck_id = create_deck(
+            conn, user_id, title=title, note_id=note_id, source="note"
+        )
 
     existing = {
         row["source_key"]: row["id"]
@@ -1136,3 +1178,224 @@ def review_activity(conn: Connection, user_id: int, days: int = 30) -> list[dict
         }
         for row in rows
     ]
+
+
+# ------------------------------------------------------------------- sharing
+
+
+VISIBILITIES = ("private", "unlisted", "public")
+
+
+def set_deck_visibility(
+    conn: Connection, deck_id: int, user_id: int, visibility: str
+) -> Optional[dict]:
+    """Change who can read a deck. Returns the deck, or None if it is not theirs."""
+    if visibility not in VISIBILITIES:
+        raise ValueError(f"visibility must be one of {VISIBILITIES}")
+    with transaction(conn):
+        conn.execute(
+            update(decks)
+            .where(decks.c.id == deck_id, decks.c.user_id == user_id)
+            .values(visibility=visibility)
+        )
+    return get_deck(conn, deck_id, user_id)
+
+
+def get_shared_deck(conn: Connection, slug: str) -> Optional[dict]:
+    """A deck by its public slug, for a reader who may be nobody at all.
+
+    The only function in this file that deliberately does not take a user_id.
+    That is the point of it, and it is also why the visibility filter is not
+    optional: this is the one query in the codebase where forgetting a
+    predicate hands a stranger someone else's material.
+
+    Private decks return None rather than 403 -- same rule as every other row
+    in the app. Refusing tells the asker the deck exists.
+    """
+    row = conn.execute(
+        select(decks).where(
+            decks.c.slug == slug,
+            decks.c.visibility.in_(("public", "unlisted")),
+        )
+    ).mappings().first()
+    if not row:
+        return None
+
+    owner = conn.execute(
+        select(users.c.display_name, users.c.email).where(users.c.id == row["user_id"])
+    ).mappings().first()
+
+    return {
+        **_deck_from_row(row),
+        # Not the owner's email. A display name is what they chose to be called;
+        # an email is a contact detail they gave us to log in with.
+        "owner": (owner["display_name"] or "A moot user") if owner else "A moot user",
+        "cards": shared_cards(conn, int(row["id"])),
+    }
+
+
+def shared_cards(conn: Connection, deck_id: int) -> list[dict]:
+    """The publicly visible shape of a deck's cards.
+
+    Four fields, and `evidence` is not one of them. Evidence is a sentence
+    lifted verbatim from the student's note, kept so a card can be checked
+    against its source -- which makes it exactly the field most likely to carry
+    surrounding private material into a public page. The card is the thing
+    being shared; the note it came from is not.
+
+    Scheduling state is left out for the same reason it is not interesting:
+    when the owner last saw a card says something about the owner, not about
+    the deck.
+    """
+    rows = conn.execute(
+        select(cards.c.id, cards.c.front, cards.c.back)
+        .where(cards.c.deck_id == deck_id)
+        .order_by(cards.c.id)
+    ).mappings()
+    return [
+        {"id": row["id"], "front": row["front"], "back": row["back"]} for row in rows
+    ]
+
+
+def fork_deck(conn: Connection, slug: str, user_id: int) -> Optional[dict]:
+    """Copy a shared deck into someone's account, unstudied.
+
+    The copy starts with no history at all: every card due now, zero reviews,
+    starting ease. Carrying the original owner's schedule across would be
+    telling the forker they already know things they have never seen -- the
+    schedule is a claim about one person's memory and does not transfer.
+
+    Reviews are not copied for the same reason, and because `card_reviews` is
+    the honest record of what *this* student did.
+    """
+    source = conn.execute(
+        select(decks).where(
+            decks.c.slug == slug, decks.c.visibility.in_(("public", "unlisted"))
+        )
+    ).mappings().first()
+    if not source:
+        return None
+
+    now = _now()
+    deck_id = create_deck(
+        conn,
+        user_id,
+        title=source["title"],
+        forked_from_id=int(source["id"]),
+        source="generated",
+    )
+
+    originals = conn.execute(
+        select(cards.c.front, cards.c.back)
+        .where(cards.c.deck_id == int(source["id"]))
+        .order_by(cards.c.id)
+    ).mappings().all()
+
+    if originals:
+        with transaction(conn):
+            conn.execute(
+                insert(cards),
+                [
+                    {
+                        "user_id": user_id,
+                        "deck_id": deck_id,
+                        "note_id": None,
+                        "front": row["front"],
+                        "back": row["back"],
+                        # Deliberately empty. The evidence sentence belongs to
+                        # the original owner's note, which the forker cannot
+                        # see and should not receive a copy of.
+                        "evidence": "",
+                        "source_key": None,
+                        "created_at": now,
+                        "due_at": now,
+                        "interval_days": 0,
+                        "ease": 250,
+                        "reviews": 0,
+                        "lapses": 0,
+                    }
+                    for row in originals
+                ],
+            )
+
+    return {**get_deck(conn, deck_id, user_id), "cards": len(originals)}
+
+
+def public_decks(conn: Connection, deck_ids: Optional[Iterable[int]] = None) -> list[dict]:
+    """Decks anyone may find. Public only -- unlisted means link-only.
+
+    An unlisted deck appearing in a listing would silently promote it to
+    public, which is the one thing its owner chose against.
+    """
+    statement = (
+        select(
+            decks.c.id,
+            decks.c.slug,
+            decks.c.title,
+            decks.c.created_at,
+            users.c.display_name,
+            func.count(cards.c.id).label("cards"),
+        )
+        .select_from(
+            decks.outerjoin(cards, cards.c.deck_id == decks.c.id).join(
+                users, users.c.id == decks.c.user_id
+            )
+        )
+        .where(decks.c.visibility == "public")
+        .group_by(
+            decks.c.id, decks.c.slug, decks.c.title, decks.c.created_at,
+            users.c.display_name,
+        )
+    )
+    if deck_ids is not None:
+        ids = [int(i) for i in deck_ids]
+        if not ids:
+            return []
+        statement = statement.where(decks.c.id.in_(ids))
+
+    rows = conn.execute(statement.order_by(decks.c.created_at.desc())).mappings()
+    return [
+        {
+            "id": row["id"],
+            "slug": row["slug"],
+            "title": row["title"],
+            "owner": row["display_name"] or "A moot user",
+            "cards": int(row["cards"] or 0),
+            "created_at": _iso(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+# Cards read into a deck's search text. A deck is a topic, and sixty cards
+# establish one; the rest is a long tail that dilutes the vector without
+# telling a searcher anything new about what the deck covers.
+DECK_SEARCH_CARDS = 60
+
+
+def deck_text_for_search(conn: Connection, deck_id: int) -> str:
+    """What a deck is *about*, as one string, for embedding.
+
+    Title, fronts, and backs. Including the answers is not an accident: the
+    default provider is a bag-of-words hash, so what it has to work with is
+    vocabulary, and half a deck's vocabulary lives in its answers. Someone
+    searching "powerhouse of the cell" is searching for a word that only ever
+    appears on a back.
+
+    Nothing private is exposed by this. Only public decks are indexed, and a
+    public deck's cards are readable by anyone with the link already.
+    """
+    row = conn.execute(select(decks.c.title).where(decks.c.id == deck_id)).first()
+    if not row:
+        return ""
+    pairs = conn.execute(
+        select(cards.c.front, cards.c.back)
+        .where(cards.c.deck_id == deck_id)
+        .order_by(cards.c.id)
+        .limit(DECK_SEARCH_CARDS)
+    ).all()
+    words = [str(row[0])]
+    for front, back in pairs:
+        words.append(str(front or ""))
+        words.append(str(back or ""))
+    return " ".join(w for w in words if w).strip()
