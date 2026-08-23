@@ -378,6 +378,19 @@ decks = Table(
     # "note" (derived from `::` syntax, re-synced on save) or "generated"
     # (written once by the model). The sync must never touch the latter.
     Column("source", String(16), nullable=False, default="generated"),
+    # "private" (default) | "unlisted" (anyone with the link) | "public"
+    # (listed and searchable). Default private and never inferred: a deck is
+    # built from a student's own notes, so the only safe default is the one
+    # that shares nothing.
+    Column("visibility", String(16), nullable=False, default="private", index=True),
+    # The public identifier. Deliberately not the primary key -- a sequential
+    # id in a URL tells anyone who looks how many decks exist and lets them
+    # walk the range. Assigned to every deck at creation rather than at the
+    # moment of sharing, so a share link never has to wait on a write.
+    Column("slug", String(16), unique=True),
+    # Where a forked deck came from. SET NULL: the original's owner can delete
+    # theirs, and the copy is still the forker's deck.
+    Column("forked_from_id", Integer, ForeignKey("decks.id", ondelete="SET NULL")),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
