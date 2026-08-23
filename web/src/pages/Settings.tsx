@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import {
-  canvas, usage, jobs, reindex, auth, setToken,
-  ApiError, type CanvasStatus, type Usage, type Job,
+  billing, canvas, usage, jobs, reindex, auth, setToken,
+  ApiError, type CanvasStatus, type ModelKeyStatus, type Pricing,
+  type Usage, type Job,
 } from "../api";
 import { Alert, JobBadge, Ago, Spinner } from "../components/ui";
 
@@ -16,8 +17,10 @@ export function SettingsPage({ theme, onThemeChange, onSignedOut }: SettingsProp
     <div className="content-inner">
       <div className="page-head">
         <h1>Settings</h1>
-        <p>Canvas, background work, and what this account has spent on AI.</p>
+        <p>What costs money, your own API key, Canvas, and background work.</p>
       </div>
+      <PricingCard />
+      <ModelKeyCard />
       <CanvasCard />
       <UsageCard />
       <JobsCard />
@@ -227,6 +230,159 @@ function AccountCard({ theme, onThemeChange, onSignedOut }: SettingsProps) {
       >
         Sign out
       </button>
+    </div>
+  );
+}
+
+/**
+ * What costs money here, stated plainly.
+ *
+ * Read from the server rather than hardcoded, because the honest answer
+ * depends on the deployment and on the account: whether an allowance is
+ * configured, how much of it is left, and whether this user brought their own
+ * key. A page that says "free" while the allowance is exhausted is a page
+ * nobody should believe twice.
+ */
+function PricingCard() {
+  const [pricing, setPricing] = useState<Pricing | null>(null);
+
+  useEffect(() => { billing.pricing().then(setPricing).catch(() => setPricing(null)); }, []);
+  if (!pricing) return null;
+
+  return (
+    <div className="card">
+      <h2>What's free</h2>
+      <p className="small faint">
+        Almost all of it. One feature calls a paid model, and you can pay for
+        that yourself with your own key — or never use it.
+      </p>
+
+      <div className="pricing-grid">
+        <div>
+          <div className="pricing-head good-text">Free, always</div>
+          <ul className="pricing-list">
+            {pricing.free.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+        <div>
+          <div className="pricing-head">Costs a model call</div>
+          <ul className="pricing-list">
+            {pricing.paid.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      </div>
+
+      <div className="small faint" style={{ marginTop: 14 }}>
+        {pricing.own_key ? (
+          <>You are using your own API key, so nothing here is rationed.</>
+        ) : pricing.capped ? (
+          <>
+            This account has spent ${pricing.spent_usd.toFixed(2)} of a $
+            {pricing.budget_usd?.toFixed(2)} monthly allowance on the paid
+            features. Add your own key below to lift that.
+          </>
+        ) : (
+          <>No monthly allowance is configured on this deployment.</>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bring your own Anthropic key.
+ *
+ * Stored exactly like the Canvas token — encrypted, bound to this account, no
+ * read path back out — and the input is cleared the moment it is sent, so the
+ * key does not sit in component state for the rest of the session.
+ */
+function ModelKeyCard() {
+  const [status, setStatus] = useState<ModelKeyStatus | null>(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = () =>
+    billing.key().then(setStatus).catch(() => setStatus(null));
+  useEffect(() => { load(); }, []);
+
+  async function save() {
+    setBusy(true); setError("");
+    try {
+      await billing.saveKey(value.trim());
+      setValue("");   // never keep it around after it has been sent
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save that key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true); setError("");
+    try {
+      await billing.removeKey();
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status) return null;
+
+  return (
+    <div className="card">
+      <h2>Your own API key</h2>
+      {error ? <Alert>{error}</Alert> : null}
+
+      {status.connected ? (
+        <>
+          <p className="small">
+            Using your key ending <code>{status.hint}</code>. Card generation and
+            chat are billed to your Anthropic account, and this app's monthly
+            allowance does not apply to you.
+          </p>
+          <div className="row">
+            <button className="btn btn-ghost danger" onClick={remove} disabled={busy}>
+              Remove key
+            </button>
+          </div>
+        </>
+      ) : !status.vault_configured ? (
+        <p className="small faint">
+          This deployment cannot store secrets — <code>STUDYLINK_SECRET_KEY</code>{" "}
+          is not set — so keys cannot be saved here. Everything on the free path
+          works regardless.
+        </p>
+      ) : (
+        <>
+          <p className="small faint">
+            Optional. Paste a key from{" "}
+            <code>console.anthropic.com</code> and the paid features stop being
+            rationed — you pay Anthropic directly. It is encrypted the same way
+            a Canvas token is and never shown again.
+          </p>
+          <div className="field">
+            <label htmlFor="model-key">Anthropic API key</label>
+            <input
+              id="model-key" className="input" type="password"
+              value={value} placeholder="sk-ant-..."
+              onChange={(e) => setValue(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div className="row">
+            <button
+              className="btn btn-primary"
+              onClick={save}
+              disabled={busy || value.trim().length < 20}
+            >
+              {busy ? "Saving…" : "Save key"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

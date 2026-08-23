@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  decks, notes, study, ApiError,
+  decks, notes, sharing, study, ApiError,
   FORGOT, HARD, GOOD, EASY,
   type Card, type CardPerformance, type Deck, type Note,
-  type Progress, type TestQuestion,
+  type Progress, type TestQuestion, type Visibility,
 } from "../api";
 import { Alert, Empty, Skeleton } from "../components/ui";
 import { IconPlus } from "../components/Icons";
@@ -134,6 +134,7 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
                   </button>
                 </div>
               </div>
+              <ShareControls deck={deck} onChanged={load} />
             </div>
           ))}
         </div>
@@ -573,6 +574,93 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
     <div className="stat">
       <div className="stat-value">{value}</div>
       <div className="small faint">{label}{sub ? ` · ${sub}` : ""}</div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ share */
+
+const VISIBILITY_COPY: Record<Visibility, { label: string; detail: string }> = {
+  private: { label: "Private", detail: "Only you can see this deck." },
+  unlisted: {
+    label: "Anyone with the link",
+    detail: "Readable by anyone you send the link to. It will not appear in Discover.",
+  },
+  public: {
+    label: "Public",
+    detail: "Listed in Discover, where anyone can find and copy it.",
+  },
+};
+
+/**
+ * The switch that publishes a deck, and the warning that has to come with it.
+ *
+ * Publishing exposes card text that came out of the student's own notes. That
+ * is not obvious from a dropdown labelled "public", so the consequence is
+ * spelled out before the change rather than confirmed after it — and the
+ * sentence names what actually leaves: the questions and answers, not the note
+ * they were written in.
+ */
+function ShareControls({ deck, onChanged }: { deck: Deck; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+
+  async function change(visibility: Visibility) {
+    setBusy(true);
+    setError("");
+    try {
+      await sharing.setVisibility(deck.id, visibility);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not change who can see this.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const link = deck.slug ? sharing.linkFor(deck.slug) : "";
+  const shared = deck.visibility !== "private";
+
+  return (
+    <div className="share-row">
+      <select
+        className="select select-sm"
+        value={deck.visibility}
+        disabled={busy}
+        onChange={(e) => change(e.target.value as Visibility)}
+        aria-label={`Who can see ${deck.title}`}
+      >
+        {(Object.keys(VISIBILITY_COPY) as Visibility[]).map((key) => (
+          <option key={key} value={key}>{VISIBILITY_COPY[key].label}</option>
+        ))}
+      </select>
+
+      <span className="small faint share-detail">
+        {shared ? (
+          <>
+            {VISIBILITY_COPY[deck.visibility].detail}{" "}
+            <strong>Everyone who opens it reads every question and answer.</strong>
+          </>
+        ) : (
+          VISIBILITY_COPY.private.detail
+        )}
+      </span>
+
+      {shared && link ? (
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => {
+            navigator.clipboard?.writeText(link);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1600);
+          }}
+        >
+          {copied ? "Link copied" : "Copy link"}
+        </button>
+      ) : null}
+
+      {error ? <span className="small danger-text">{error}</span> : null}
     </div>
   );
 }

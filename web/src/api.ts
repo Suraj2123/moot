@@ -44,7 +44,13 @@ export class ApiError extends Error {
 }
 
 function headers(): Record<string, string> {
-  const base: Record<string, string> = { "Content-Type": "application/json" };
+  // Accept is explicit because /d/{slug} is content-negotiated: it answers a
+  // browser navigation with the app and code with JSON. `fetch` sends */* by
+  // default, which is not a preference the server can act on.
+  const base: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
   if (token) base.Authorization = `Bearer ${token}`;
   return base;
 }
@@ -273,6 +279,8 @@ export async function* askStream(
 
 /* ----------------------------------------------------------------- cards */
 
+export type Visibility = "private" | "unlisted" | "public";
+
 export interface Deck {
   id: number;
   title: string;
@@ -280,6 +288,10 @@ export interface Deck {
   created_at: string;
   cards: number;
   due: number;
+  visibility: Visibility;
+  /** The public identifier. Present from creation, long before it is shared. */
+  slug: string | null;
+  forked_from_id: number | null;
 }
 export interface Card {
   id: number;
@@ -378,4 +390,66 @@ export const study = {
     api.get<CardPerformance[]>(
       `/progress/weak?limit=${limit}${deckId ? `&deck_id=${deckId}` : ""}`,
     ),
+};
+
+/* ------------------------------------------------------ sharing & discovery */
+
+export interface SharedCard {
+  id: number;
+  front: string;
+  back: string;
+}
+export interface SharedDeck {
+  id: number;
+  slug: string;
+  title: string;
+  owner: string;
+  visibility: Visibility;
+  created_at: string;
+  cards: SharedCard[];
+}
+export interface PublicDeck {
+  id: number;
+  slug: string;
+  title: string;
+  owner: string;
+  cards: number;
+  created_at: string;
+  score?: number;
+}
+
+export const sharing = {
+  /** Readable without a session — this is the one anonymous call in the app. */
+  read: (slug: string) => api.get<SharedDeck>(`/d/${encodeURIComponent(slug)}`),
+  fork: (slug: string) => api.post<Deck>(`/d/${encodeURIComponent(slug)}/fork`),
+  setVisibility: (deckId: number, visibility: Visibility) =>
+    api.patch<Deck>(`/decks/${deckId}`, { visibility }),
+  discover: (q = "") =>
+    api.get<PublicDeck[]>(`/discover${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  /** The full URL to hand someone, built from wherever this page is served. */
+  linkFor: (slug: string) => `${window.location.origin}/d/${slug}`,
+};
+
+/* -------------------------------------------------------- keys and pricing */
+
+export interface ModelKeyStatus {
+  connected: boolean;
+  hint?: string;
+  updated_at?: string;
+  vault_configured: boolean;
+}
+export interface Pricing {
+  free: string[];
+  paid: string[];
+  own_key: boolean;
+  budget_usd: number | null;
+  spent_usd: number;
+  capped: boolean;
+}
+
+export const billing = {
+  key: () => api.get<ModelKeyStatus>("/model-key"),
+  saveKey: (api_key: string) => api.post<ModelKeyStatus>("/model-key", { api_key }),
+  removeKey: () => api.del<void>("/model-key"),
+  pricing: () => api.get<Pricing>("/pricing"),
 };

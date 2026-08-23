@@ -20,6 +20,11 @@ export default defineConfig({
         "/auth", "/notes", "/courses", "/assignments", "/search", "/ask",
         "/canvas", "/jobs", "/sync", "/reindex", "/usage", "/health",
         "/evaluation", "/work-session",
+        // Added later than the list above, and each one was invisible in dev
+        // until it was: an unproxied path is served by Vite, which answers
+        // with index.html and a JSON parse error rather than a 404.
+        "/decks", "/cards", "/outline", "/progress", "/discover", "/d",
+        "/model-key", "/pricing",
       ].map((path) => [path, { target: "http://127.0.0.1:8000", changeOrigin: true }])
     ),
   },
