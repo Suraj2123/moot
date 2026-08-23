@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from . import llm
 from .config import AGENT_MODEL
 
 logger = logging.getLogger(__name__)
@@ -367,12 +368,13 @@ class CardWriter:
             )
         count = max(1, min(count, MAX_CARDS_PER_NOTE))
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_prompt(title, body, count)}],
-        )
+        with llm.upstream(GenerationUnavailable):
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_prompt(title, body, count)}],
+            )
         text = "".join(
             getattr(block, "text", "") for block in getattr(message, "content", [])
         )

@@ -41,7 +41,7 @@ from typing import Iterator, Optional
 from sqlalchemy import Connection
 
 from .agent import AgentUnavailable, extract_citations
-from . import usage
+from . import llm, usage
 from .config import AGENT_MODEL
 from .models import NoteMatch
 from .retrieval import Retriever
@@ -281,8 +281,11 @@ class NoteChat:
         # an allowance.
         usage.check_budget(self.conn, self.user_id)
 
-        with self._create(self._messages(question, build_context(matches), history or [])) as stream:
-            message = stream.get_final_message()
+        with llm.upstream(AgentUnavailable):
+            with self._create(
+                self._messages(question, build_context(matches), history or [])
+            ) as stream:
+                message = stream.get_final_message()
 
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
@@ -323,12 +326,19 @@ class NoteChat:
             ],
         }
 
+        # The whole stream, not just its opening: a key with no credit fails
+        # when the connection is made, but an overload or a dropped connection
+        # fails halfway through, and both have to reach the caller as the same
+        # readable error rather than as a traceback mid-answer.
         chunks: list[str] = []
-        with self._create(self._messages(question, build_context(matches), history or [])) as stream:
-            for piece in stream.text_stream:
-                chunks.append(piece)
-                yield {"type": "text", "text": piece}
-            message = stream.get_final_message()
+        with llm.upstream(AgentUnavailable):
+            with self._create(
+                self._messages(question, build_context(matches), history or [])
+            ) as stream:
+                for piece in stream.text_stream:
+                    chunks.append(piece)
+                    yield {"type": "text", "text": piece}
+                message = stream.get_final_message()
 
         answer = self._finish("".join(chunks).strip(), matches, message)
         yield {"type": "done", "answer": answer.as_dict()}

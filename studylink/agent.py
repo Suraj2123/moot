@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 from sqlalchemy import Connection, insert, select
 
-from . import store
+from . import llm, store
 from .schema import work_messages, work_sessions
 from .config import AGENT_MODEL
 from .models import Assignment, NoteMatch, WorkSessionOutput
@@ -256,7 +256,8 @@ class WorkSessionAgent:
         tool_calls: list[dict] = []
 
         for _ in range(max_iterations):
-            response = self._create(messages, system)
+            with llm.upstream(AgentUnavailable):
+                response = self._create(messages, system)
 
             if response.stop_reason == "refusal":
                 return AgentResult(
