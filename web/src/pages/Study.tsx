@@ -75,7 +75,7 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
           <p>Flashcards made from your notes, and practice tests built from those cards.</p>
         </div>
         <button className="btn btn-primary" onClick={() => setMaking((v) => !v)}>
-          <IconPlus /> Make cards
+          <IconPlus /> Write cards with AI
         </button>
       </div>
 
@@ -91,8 +91,17 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
         <Skeleton count={3} />
       ) : items.length === 0 ? (
         <Empty title="No decks yet">
-          Pick a note and moot will write flashcards from it — each one quoting the
-          sentence it came from, so you can check any card against your own material.
+          <p style={{ margin: "0 0 10px" }}>
+            Write <code>term :: definition</code> on a line in any note and it
+            becomes a card here — no setup, no API key, and the deck stays in
+            step with the note as you edit it.
+          </p>
+          <p style={{ margin: 0 }}>
+            <code>:::</code> asks it both ways, <code>{"{{braces}}"}</code> hide a
+            word, and Tab indents to give a card its context. Or use{" "}
+            <strong>Write cards with AI</strong> to have moot read a note and
+            write them for you.
+          </p>
         </Empty>
       ) : (
         <div className="stack">
@@ -136,7 +145,6 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
 function DeckMaker({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const [available, setAvailable] = useState<Note[] | null>(null);
   const [noteId, setNoteId] = useState<number | null>(null);
-  const [count, setCount] = useState(10);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ cards: number; rejected: number } | null>(null);
@@ -152,7 +160,9 @@ function DeckMaker({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
     setBusy(true);
     setError("");
     try {
-      const made = await decks.create(noteId, count);
+      // No count: the note decides how many cards it can support. Asking a
+      // student for a number they cannot know just turns into padding.
+      const made = await decks.create(noteId);
       setResult(made);
       setTimeout(onDone, 1200);
     } catch (err) {
@@ -189,23 +199,17 @@ function DeckMaker({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
         ) : null}
       </div>
 
-      <div className="field">
-        <label htmlFor="deck-count">How many cards</label>
-        <input
-          id="deck-count" className="input" type="number" min={1} max={20}
-          value={count}
-          onChange={(e) => setCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-        />
-      </div>
-
       <div className="row">
         <button className="btn btn-primary" onClick={make} disabled={busy || noteId == null}>
-          {busy ? "Writing cards…" : "Make cards"}
+          {busy ? "Reading the note…" : "Write cards for me"}
         </button>
         <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <span className="small faint">
-          Every card must quote your note. Ones that don't are dropped.
-        </span>
+      </div>
+      <div className="small faint" style={{ marginTop: 10 }}>
+        As many cards as the note has ideas — a short note makes a few, a dense
+        one makes more. Every card must quote your note; ones that don't are
+        dropped. Needs an Anthropic API key with credit. Writing{" "}
+        <code>::</code> in a note makes cards for free.
       </div>
     </div>
   );

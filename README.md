@@ -104,8 +104,11 @@ card you have missed eight times out of twenty. Cards you have only ever got
 right are excluded however thin the evidence.
 
 **Generated flashcards and practice tests** — pick a note and moot writes question/answer
-cards from it. Every card must quote the sentence in the note that supports it,
-and one that cannot is dropped rather than shown; the count of dropped cards is
+cards from it. How many is decided by the note, not by a number you type: asking
+for ten cards from a three-sentence note gets you ten cards, seven of which
+restate each other, and every one of those is then reviewed forever. Every card
+must quote the sentence in the note that supports it, and one that cannot is
+dropped rather than shown; the count of dropped cards is
 reported, so groundedness is measured rather than promised. Review uses a small
 SM-2 variant and every grade is stored, so a better scheduler can be fitted to
 real data later. Practice tests are assembled from cards that already exist and
@@ -155,6 +158,7 @@ usage             per-user LLM cost ledger and monthly cap
 cards             flashcard generation, SM-2 lite scheduling, practice tests
 outline           RemNote-style note syntax -> cards, with stable identities
 progress          mastery states, smoothed weak-card ranking, streaks
+llm               turns a failed model call into a sentence, not a 500
 evaluation        labelled set, metrics, LLM judge, config sweep
 service           the facade the UI, API, and scripts all drive
 ```
