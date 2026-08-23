@@ -30,6 +30,7 @@ from .evaluation.dataset import load_labels, sync_to_db
 from .evaluation.runner import EvalReport, evaluate_config, sweep
 from .indexing import Indexer, IndexStats
 from .models import Assignment, AssignmentMatch, Note, NoteMatch
+from .vectorstore import PublicDeckIndex
 
 
 @dataclass
@@ -362,6 +363,78 @@ class StudyLink:
         assert_owned(self.conn, "decks", deck_id, self.user_id)
         return store.deck_stats(self.conn, self.user_id, deck_id)
 
+    # ---------------------------------------------------------------- sharing
+
+    def set_deck_visibility(self, deck_id: int, visibility: str) -> dict:
+        """Publish, unlist, or withdraw a deck, and keep the search index honest.
+
+        The index update is not a background job. A student who makes a deck
+        private has withdrawn consent, and "it stops being findable within a
+        minute" is not what withdrawing consent means -- so the vector goes at
+        the same moment as the flag, in the same request.
+        """
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        deck = store.set_deck_visibility(self.conn, deck_id, self.user_id, visibility)
+
+        index = PublicDeckIndex(self.conn)
+        if visibility == "public":
+            self.index_public_deck(deck_id)
+        else:
+            index.forget(deck_id)
+        return deck
+
+    def index_public_deck(self, deck_id: int) -> bool:
+        """Embed a public deck so it can be found. Returns whether it indexed.
+
+        Uses the same provider as everything else, which on the default
+        configuration is the offline hashing one -- so deck discovery works
+        with no API key, like every other core feature.
+        """
+        text = store.deck_text_for_search(self.conn, deck_id)
+        if not text.strip():
+            return False
+        vector = self.provider.embed([text])[0]
+        PublicDeckIndex(self.conn).upsert(deck_id, vector, self.provider.name)
+        return True
+
+    def shared_deck(self, slug: str) -> Optional[dict]:
+        """A deck by slug for any reader, signed in or not."""
+        return store.get_shared_deck(self.conn, slug)
+
+    def fork_deck(self, slug: str) -> Optional[dict]:
+        return store.fork_deck(self.conn, slug, self.user_id)
+
+    def discover_decks(self, query: str = "", limit: int = 20) -> list[dict]:
+        """Public decks, ranked by a query or listed newest-first without one.
+
+        An empty query is not an empty result. Someone who opens the page
+        before typing anything should see that decks exist at all.
+        """
+        query = (query or "").strip()
+        if not query:
+            return store.public_decks(self.conn)[:limit]
+
+        vector = self.provider.embed([query])[0]
+        hits = PublicDeckIndex(self.conn).search(
+            vector, self.provider.name, top_k=limit
+        )
+        # A cosine search always returns its top k, however badly they match.
+        # Without a floor, searching "photosynthesis" on a service holding one
+        # deck about Roman history returns that deck, and the page has just
+        # told a lie about what it found. The same threshold the retriever
+        # uses, for the same reason.
+        floor = self.config.score_threshold
+        hits = [(deck_id, score) for deck_id, score in hits if score >= floor]
+        if not hits:
+            return []
+
+        scores = {deck_id: score for deck_id, score in hits}
+        found = store.public_decks(self.conn, deck_ids=list(scores))
+        for deck in found:
+            deck["score"] = round(scores.get(deck["id"], 0.0), 4)
+        # Ranked by the search, not by the store's newest-first ordering.
+        return sorted(found, key=lambda d: -d["score"])
+
     def sync_note_cards(self, note_id: int, title: str, body: str) -> dict:
         """Keep a note's own deck in step with the cards its text declares.
 
@@ -370,10 +443,22 @@ class StudyLink:
         job would add a window where the note and its cards disagree for no
         benefit anyone can perceive.
         """
-        return store.sync_note_cards(
+        result = store.sync_note_cards(
             self.conn, self.user_id, note_id,
             outline_module.to_cards(body), title=title or "Untitled",
         )
+
+        # A published deck's search text is its cards, so editing the note that
+        # owns it makes the index describe a deck that no longer exists in that
+        # shape. Re-embedding here rather than on the next publish is the
+        # difference between search finding the deck as it is and finding it as
+        # it was.
+        deck_id = result.get("deck_id")
+        if deck_id and (result["added"] or result["updated"] or result["removed"]):
+            deck = store.get_deck(self.conn, deck_id, self.user_id)
+            if deck and deck["visibility"] == "public":
+                self.index_public_deck(deck_id)
+        return result
 
     def card_performance(self, deck_id: Optional[int] = None) -> list[dict]:
         if deck_id is not None:

@@ -124,7 +124,7 @@ if _origins:
         # browser attach cookies to cross-origin calls, and nothing here wants
         # that.
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -230,6 +230,10 @@ class DeckIn(BaseModel):
     # decides how many cards it can support. See cards.suggest_count.
     count: Optional[int] = Field(default=None, ge=1, le=20)
     title: Optional[str] = None
+
+
+class DeckPatchIn(BaseModel):
+    visibility: str
 
 
 class ReviewIn(BaseModel):
@@ -486,6 +490,23 @@ def spa(path: str):
             return FileResponse(candidate)
 
     return FileResponse(index)
+
+
+def _wants_html(request: Request) -> bool:
+    """Whether this looks like a browser navigating rather than code fetching.
+
+    Browsers send `text/html` first on a navigation; `fetch` sends `*/*` unless
+    told otherwise, and this app's client asks for JSON explicitly. Checking
+    that html outranks json is enough to tell a pasted link from an API call,
+    and being wrong in either direction is recoverable -- a reader gets the
+    other representation of the same public deck.
+    """
+    accept = request.headers.get("accept", "")
+    if "text/html" not in accept:
+        return False
+    if "application/json" not in accept:
+        return True
+    return accept.index("text/html") < accept.index("application/json")
 
 
 @api.get("/healthz", include_in_schema=False)
@@ -1042,6 +1063,69 @@ def get_deck(deck_id: int, app: StudyLink = Depends(current_app)) -> dict:
 def delete_deck(deck_id: int, app: StudyLink = Depends(current_app)) -> Response:
     app.delete_deck(deck_id)
     return Response(status_code=204)
+
+
+@api.patch("/decks/{deck_id}")
+def update_deck(
+    deck_id: int, payload: DeckPatchIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Change who can read a deck."""
+    if payload.visibility not in store.VISIBILITIES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"visibility must be one of {', '.join(store.VISIBILITIES)}",
+        )
+    return app.set_deck_visibility(deck_id, payload.visibility)
+
+
+# ---------------------------------------------------------------- shared decks
+
+
+@api.get("/d/{slug}")
+def shared_deck(slug: str, request: Request, conn=Depends(db_connection)):
+    """A shared deck, readable by anyone with the link.
+
+    The only unauthenticated read path in this API, so it does its own database
+    work rather than going through `current_app` -- there is no user to build a
+    service object for, and inventing one would mean an anonymous reader
+    briefly holding someone's identity.
+
+    Content-negotiated. A browser navigating to a share link sends
+    `Accept: text/html` and gets the app, which then fetches this same URL as
+    JSON. One pretty URL to paste into a group chat, rather than a page route
+    and an API route that must be kept in step.
+    """
+    if _wants_html(request):
+        return spa("")
+
+    deck = store.get_shared_deck(conn, slug)
+    if deck is None:
+        # 404 and not 403: a private deck must not be distinguishable from one
+        # that was never created.
+        raise HTTPException(status_code=404, detail="No shared deck at that link.")
+    return deck
+
+
+@api.post("/d/{slug}/fork", status_code=201)
+def fork_deck(slug: str, app: StudyLink = Depends(current_app)) -> dict:
+    """Copy a shared deck into your own account, unstudied."""
+    forked = app.fork_deck(slug)
+    if forked is None:
+        raise HTTPException(status_code=404, detail="No shared deck at that link.")
+    return forked
+
+
+@api.get("/discover")
+def discover(
+    q: str = "", limit: int = 20, app: StudyLink = Depends(current_app)
+) -> list[dict]:
+    """Search public decks, or list them when there is no query.
+
+    Public only. An unlisted deck is reachable by its link and must never
+    appear here -- surfacing one would convert "anyone with the link" into
+    "anyone at all", which is the permission its owner declined.
+    """
+    return app.discover_decks(q, limit=min(max(limit, 1), 50))
 
 
 @api.get("/decks/{deck_id}/study")
