@@ -230,6 +230,94 @@ class StudyLink:
     def get_note(self, note_id: int) -> Optional[Note]:
         return store.get_note(self.conn, note_id, self.user_id)
 
+    # How many unindexed notes this request will index itself rather than
+    # leaving for the worker. A student who has just written their first few
+    # notes and typed their first target is the whole audience for this
+    # feature, and telling them "no matches, come back in a minute" is
+    # indistinguishable from telling them it does not work. Someone who has
+    # just uploaded two hundred PDFs has a worker for that, and should not
+    # discover the difference as a thirty-second POST.
+    INLINE_INDEX_LIMIT = 25
+
+    def pending_notes(self) -> int:
+        """Notes that retrieval cannot see yet.
+
+        Counted over the notes rather than over the status map, because that
+        map is built from chunk rows and so has no entry at all for a note
+        that has never been chunked -- which is exactly the case this is for.
+        A note absent from it is the most unindexed a note can be.
+        """
+        status = store.note_index_status(
+            self.conn, self.user_id,
+            model=self.provider.name,
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+        )
+        return sum(
+            1
+            for note in store.list_notes(self.conn, self.user_id)
+            if status.get(note.id) != "indexed"
+        )
+
+    def catch_up_index(self) -> int:
+        """Index a small backlog now; leave a large one to the worker."""
+        pending = self.pending_notes()
+        if 0 < pending <= self.INLINE_INDEX_LIMIT:
+            self.reindex()
+        return pending
+
+    # ------------------------------------------------------------ study targets
+
+    def create_target(
+        self,
+        name: str,
+        description: str = "",
+        due_at: Optional[str] = None,
+    ) -> Assignment:
+        """Something to study for, and the matched notes, in one call.
+
+        Embedded immediately rather than left for the worker. The whole value
+        of typing a topic is seeing which of your notes bear on it *now*, and a
+        target that matches nothing for thirty seconds reads as a feature that
+        does not work rather than one that is still indexing.
+        """
+        self.catch_up_index()
+        target_id = store.create_target(
+            self.conn, self.user_id, name=name, description=description, due_at=due_at
+        )
+        target = store.get_assignment(self.conn, target_id, self.user_id)
+        vector = self.provider.embed([target.retrieval_text])[0]
+        self.indexer.vectors.upsert_many(
+            "assignment", [target_id], vector.reshape(1, -1), self.provider.name
+        )
+        return target
+
+    def update_target(self, target_id: int, **fields) -> Assignment:
+        assert_owned(self.conn, "assignments", target_id, self.user_id)
+        if store.assignment_source(self.conn, target_id, self.user_id) != "manual":
+            raise CanvasError(
+                "This came from Canvas, so editing it here would be undone by "
+                "the next sync. Change it in Canvas, or make a target of your "
+                "own."
+            )
+        target = store.update_target(self.conn, target_id, self.user_id, **fields)
+        # The text it matches on has changed, so the vector describing it has to.
+        vector = self.provider.embed([target.retrieval_text])[0]
+        self.indexer.vectors.upsert_many(
+            "assignment", [target_id], vector.reshape(1, -1), self.provider.name
+        )
+        return target
+
+    def delete_target(self, target_id: int) -> None:
+        assert_owned(self.conn, "assignments", target_id, self.user_id)
+        if store.assignment_source(self.conn, target_id, self.user_id) != "manual":
+            raise CanvasError(
+                "This came from Canvas. Disconnect Canvas or remove it there -- "
+                "deleting it here would only bring it back on the next sync."
+            )
+        self.indexer.vectors.delete("assignment", [target_id])
+        store.delete_target(self.conn, target_id, self.user_id)
+
     # ------------------------------------------------------------------ indexing
 
     def reindex(self, force: bool = False) -> IndexStats:
@@ -369,6 +457,71 @@ class StudyLink:
     def deck_stats(self, deck_id: int) -> dict:
         assert_owned(self.conn, "decks", deck_id, self.user_id)
         return store.deck_stats(self.conn, self.user_id, deck_id)
+
+    # --------------------------------------------------- writing cards by hand
+
+    def create_empty_deck(self, title: str) -> dict:
+        """A deck with a title and no cards yet, for typing them in.
+
+        The third way to get a deck, alongside a note declaring them and the
+        model writing them -- and the one that needs neither a note nor a key.
+        """
+        title = (title or "").strip() or "Untitled deck"
+        deck_id = store.create_deck(self.conn, self.user_id, title=title)
+        return {**store.get_deck(self.conn, deck_id, self.user_id), "cards": 0, "due": 0}
+
+    def rename_deck(self, deck_id: int, title: str) -> dict:
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        return store.rename_deck(
+            self.conn, deck_id, self.user_id, (title or "").strip() or "Untitled deck"
+        )
+
+    def add_cards(self, deck_id: int, pairs: list[tuple[str, str]]) -> list[dict]:
+        assert_owned(self.conn, "decks", deck_id, self.user_id)
+        ids = store.write_cards(self.conn, self.user_id, deck_id, pairs)
+        self._reindex_if_published(deck_id)
+        return [store.get_card(self.conn, card_id, self.user_id) for card_id in ids]
+
+    def edit_card(
+        self, card_id: int, front: Optional[str] = None, back: Optional[str] = None
+    ) -> dict:
+        """Change a card's text, unless a note is the one writing it."""
+        assert_owned(self.conn, "cards", card_id, self.user_id)
+        self._refuse_if_note_writes_it(card_id, "edited")
+        card = store.update_card(self.conn, card_id, self.user_id, front, back)
+        self._reindex_if_published(int(card["deck_id"]))
+        return card
+
+    def remove_card(self, card_id: int) -> None:
+        assert_owned(self.conn, "cards", card_id, self.user_id)
+        self._refuse_if_note_writes_it(card_id, "deleted")
+        card = store.get_card(self.conn, card_id, self.user_id)
+        store.delete_card(self.conn, card_id, self.user_id)
+        if card:
+            self._reindex_if_published(int(card["deck_id"]))
+
+    def _refuse_if_note_writes_it(self, card_id: int, verb: str) -> None:
+        """Stop an edit that the next note save would silently undo.
+
+        A card declared by `::` in a note is re-derived from that text every
+        time the note is saved. Accepting an edit here and reverting it an hour
+        later is worse than refusing now, because the student has no way to
+        find out it happened -- so this says where the real text lives instead.
+        """
+        origin = store.card_origin(self.conn, card_id, self.user_id)
+        if origin and origin["derived"]:
+            where = f' "{origin["note_title"]}"' if origin["note_title"] else ""
+            raise cards_module.CardError(
+                f"This card is written by your note{where}, so it cannot be "
+                f"{verb} here -- the next time you save that note it would come "
+                "back. Change the line in the note and the card follows."
+            )
+
+    def _reindex_if_published(self, deck_id: int) -> None:
+        """Keep a public deck's search text in step with cards typed by hand."""
+        deck = store.get_deck(self.conn, deck_id, self.user_id)
+        if deck and deck["visibility"] == "public":
+            self.index_public_deck(deck_id)
 
     # ---------------------------------------------------------------- sharing
 

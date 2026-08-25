@@ -6,10 +6,12 @@ import {
   type Progress, type TestQuestion, type Visibility,
 } from "../api";
 import { Alert, Empty, Skeleton } from "../components/ui";
+import { DeckEditor } from "./DeckEditor";
 import { IconPlus } from "../components/Icons";
 
 type View =
   | { name: "decks" }
+  | { name: "edit"; deckId: number }
   | { name: "study"; deckId: number; title: string }
   | { name: "test"; deckId: number; title: string };
 
@@ -24,6 +26,9 @@ export function StudyPage() {
         onDone={() => setView({ name: "decks" })}
       />
     );
+  }
+  if (view.name === "edit") {
+    return <DeckEditor deckId={view.deckId} onDone={() => setView({ name: "decks" })} />;
   }
   if (view.name === "test") {
     return (
@@ -43,6 +48,19 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
   const [items, setItems] = useState<Deck[] | null>(null);
   const [error, setError] = useState("");
   const [making, setMaking] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  async function createEmpty() {
+    setCreating(true);
+    try {
+      const deck = await decks.createEmpty("Untitled deck");
+      onOpen({ name: "edit", deckId: deck.id });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not make a deck.");
+    } finally {
+      setCreating(false);
+    }
+  }
 
   async function load() {
     try {
@@ -74,9 +92,14 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
           <h1>Study</h1>
           <p>Flashcards made from your notes, and practice tests built from those cards.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setMaking((v) => !v)}>
-          <IconPlus /> Write cards with AI
-        </button>
+        <div className="row">
+          <button className="btn btn-primary" onClick={createEmpty} disabled={creating}>
+            <IconPlus /> {creating ? "Creating…" : "New deck"}
+          </button>
+          <button className="btn" onClick={() => setMaking((v) => !v)}>
+            Write cards with AI
+          </button>
+        </div>
       </div>
 
       {error ? <Alert>{error}</Alert> : null}
@@ -98,9 +121,9 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
           </p>
           <p style={{ margin: 0 }}>
             <code>:::</code> asks it both ways, <code>{"{{braces}}"}</code> hide a
-            word, and Tab indents to give a card its context. Or use{" "}
-            <strong>Write cards with AI</strong> to have moot read a note and
-            write them for you.
+            word, and Tab indents to give a card its context. Or press{" "}
+            <strong>New deck</strong> and type terms and definitions straight in
+            — no note, no key.
           </p>
         </Empty>
       ) : (
@@ -128,6 +151,12 @@ function DeckList({ onOpen }: { onOpen: (v: View) => void }) {
                     onClick={() => onOpen({ name: "test", deckId: deck.id, title: deck.title })}
                   >
                     Test
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => onOpen({ name: "edit", deckId: deck.id })}
+                  >
+                    Edit
                   </button>
                   <button className="btn btn-ghost btn-sm danger" onClick={() => remove(deck)}>
                     Delete

@@ -27,6 +27,8 @@ class Assignment:
     submission_types: str = ""
     html_url: Optional[str] = None
     course_name: str = ""
+    #: "canvas" for a synced assignment, "manual" for a target someone typed.
+    source: str = "canvas"
 
     @property
     def retrieval_text(self) -> str:

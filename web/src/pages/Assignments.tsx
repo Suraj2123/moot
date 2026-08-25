@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { assignments, ApiError, type Assignment, type Match } from "../api";
+import { assignments, targets, ApiError, type Assignment, type Match } from "../api";
 import { Alert, Empty, Skeleton, ConfidenceBadge, ScoreBar } from "../components/ui";
 
 export function AssignmentsPage() {
@@ -16,18 +16,24 @@ export function AssignmentsPage() {
   return (
     <div className="content-inner">
       <div className="page-head">
-        <h1>Assignments</h1>
-        <p>Pulled from Canvas. Open one to see which of your notes bear on it, and why.</p>
+        <h1>Match</h1>
+        <p>
+          Name something you are studying for and see which of your notes bear
+          on it, with the sentence that made each match.
+        </p>
       </div>
 
       {error ? <Alert>{error}</Alert> : null}
 
+      <TargetComposer onCreated={(t) => { setItems((prev) => [t, ...(prev ?? [])]); setOpen(t.id); }} />
+
       {items === null ? (
         <Skeleton count={4} />
       ) : items.length === 0 ? (
-        <Empty title="No assignments yet">
-          Connect Canvas in Settings and run a sync — assignments and their descriptions
-          come across automatically.
+        <Empty title="Nothing to match against yet">
+          Type an exam topic, a syllabus section, or a question above — moot
+          will show which of your notes cover it. Connecting Canvas in Settings
+          fills this in from your assignments as well.
         </Empty>
       ) : (
         <div className="stack">
@@ -37,7 +43,7 @@ export function AssignmentsPage() {
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ fontSize: 14 }}>{a.name}</strong>
                   <div className="small faint">
-                    {a.course}
+                    {a.source === "canvas" ? a.course || "Canvas" : "Yours"}
                     {a.due_at ? ` · due ${new Date(a.due_at).toLocaleDateString()}` : ""}
                     {a.points_possible ? ` · ${a.points_possible} pts` : ""}
                   </div>
@@ -101,6 +107,94 @@ function MatchList({ assignmentId }: { assignmentId: number }) {
             {m.evidence?.snippet ? <div className="snippet">{m.evidence.snippet}</div> : null}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Name something to study for.
+ *
+ * This is the form that makes the matching engine reachable. Before it, the
+ * only way to get a row to match against was a Canvas sync, which needs a
+ * personal access token that plenty of universities disable for students --
+ * so the part of moot with the evidence layer and the measured retrieval
+ * behind it did nothing at all for them.
+ *
+ * The description field is not optional decoration. A name alone is a few
+ * words; a pasted syllabus section or exam brief is the richest signal anyone
+ * will ever hand this feature, and the retriever is much better with it.
+ */
+function TargetComposer({ onCreated }: { onCreated: (t: Assignment) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(0);
+
+  async function create() {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const made = await targets.create(name.trim(), description.trim());
+      setPending(made.notes_pending ?? 0);
+      setName("");
+      setDescription("");
+      setOpen(false);
+      onCreated(made);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not make that target.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <>
+        {pending > 0 ? (
+          <Alert kind="info">
+            {pending} note{pending === 1 ? " is" : "s are"} still being indexed, so
+            matches may be incomplete for a moment.
+          </Alert>
+        ) : null}
+        <button className="btn btn-primary" style={{ marginBottom: 16 }} onClick={() => setOpen(true)}>
+          + What are you studying for?
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      {error ? <Alert>{error}</Alert> : null}
+      <div className="field">
+        <label htmlFor="target-name">Topic, exam, or question</label>
+        <input
+          id="target-name" className="input" value={name} autoFocus
+          placeholder="Midterm 2: optimisation and regularisation"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") create(); }}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="target-detail">Detail (optional, but it matches much better)</label>
+        <textarea
+          id="target-detail" className="textarea" style={{ minHeight: 90 }}
+          value={description}
+          placeholder="Paste the syllabus section, the exam brief, or the question you are answering."
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </div>
+      <div className="row">
+        <button className="btn btn-primary" onClick={create} disabled={busy || !name.trim()}>
+          {busy ? "Matching…" : "Match my notes"}
+        </button>
+        <button className="btn btn-ghost" onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </button>
       </div>
     </div>
   );

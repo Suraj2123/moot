@@ -38,7 +38,7 @@ const TABS: { id: Tab; label: string; icon: () => JSX.Element; title: string }[]
   { id: "notes", label: "Notes", icon: IconNotes, title: "Notes" },
   { id: "discover", label: "Discover", icon: IconSearch, title: "Public decks" },
   { id: "chat", label: "Ask", icon: IconChat, title: "Ask your notes" },
-  { id: "assignments", label: "Assignments", icon: IconAssignments, title: "Assignments" },
+  { id: "assignments", label: "Match", icon: IconAssignments, title: "Match notes to what you are studying for" },
   { id: "settings", label: "Settings", icon: IconSettings, title: "Settings" },
 ];
 

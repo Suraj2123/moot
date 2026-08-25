@@ -1,18 +1,31 @@
 /* moot design system.
  *
- * Matte black, in the sense an editor is: near-neutral dark surfaces with
- * almost no colour in them, separated by borders rather than by shadows and
- * elevation. The previous palette was blue-tinted and lifted panels off the
- * page; this one keeps chroma close to zero and lets a one-pixel line do the
- * work, which is what makes a tool read as a surface to work on rather than a
- * dashboard to look at.
+ * Paper, not screen. The palette is Zen Browser's: a warm off-white
+ * (#f2f0e3) and a soft ink (#2e2e2e) in daylight, inverted at night to a
+ * near-black page with bone-coloured text (#d1cfc0). What makes it read as
+ * paper is that nothing is neutral grey and nothing is pure white or pure
+ * black -- every surface carries a little yellow, the way stock does.
  *
- * Everything is CSS variables, so the two themes differ by a token block
- * rather than by a parallel stylesheet.
+ * The previous palette was matte black with a blue accent: correct for a
+ * code editor, cold for something you sit and read for an hour. Notes are
+ * closer to a notebook than to a terminal.
  *
- * Type is one sans throughout, tightened. The serif is gone: it was a nice
- * idea for prose, but mixing a display serif into a tool makes it feel like a
- * reading app, and notes here are working material, not an article.
+ * Three rules the rest of this file follows:
+ *
+ *   Separation by hairline, not by shadow. Borders are the text colour at
+ *   8-10% alpha rather than a fixed grey, so they stay in the same family as
+ *   whatever they sit on and never look like a drawn box.
+ *
+ *   One warm accent (coral #f76f53) for anything you can press. Danger is a
+ *   rose red, deliberately on the other side of red from the accent, because
+ *   "delete" and "the primary button" must not be the same colour.
+ *
+ *   Space is a material. Wider gutters and looser lines are most of why the
+ *   original feels calm; a tighter version of the same palette does not.
+ *
+ * Type is the app's own -- Inter, not Zen's Bricolage Grotesque -- tightened
+ * at display sizes to get the same compact-grotesque feel without shipping a
+ * webfont. Everything here works offline, including the font stack.
  */
 
 :root {
@@ -22,68 +35,84 @@
   --font-prose: var(--font-ui);
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
-  /* Greys, not blue-greys. A touch of warmth (r >= g >= b by a point or two)
-   * keeps large black areas from reading as cold. */
-  --bg: #0a0a0a;
-  --bg-raised: #0f0f10;
-  --bg-inset: #070707;
-  --bg-hover: #161617;
-  --border: #1e1e20;
-  --border-strong: #2b2b2e;
+  /* Night paper. Not grey: r > g > b throughout, so a full screen of it reads
+   * warm rather than like a switched-off monitor. */
+  --paper: #1f1f1f;
+  --ink: #d1cfc0;
 
-  --text: #ededee;
-  --text-muted: #8f8f94;
-  --text-faint: #626268;
+  --bg: var(--paper);
+  --bg-raised: #262524;
+  --bg-inset: #1a1a19;
+  --bg-hover: #2e2d2b;
 
-  /* One restrained accent. Bright enough to find, quiet enough that a page
-   * full of controls does not glow. */
-  --accent: #6e8efb;
-  --accent-soft: rgba(110, 142, 251, 0.12);
-  --accent-text: #a3b5fc;
+  /* Borders as the ink at low alpha -- Zen's --zen-subtle. A fixed grey would
+   * drift out of the family the moment a surface changes tone. */
+  --border: rgba(209, 207, 192, 0.10);
+  --border-strong: rgba(209, 207, 192, 0.19);
 
-  --good: #4ec98a;
-  --good-soft: rgba(78, 201, 138, 0.12);
-  --warn: #e0b252;
-  --warn-soft: rgba(224, 178, 82, 0.12);
-  --bad: #f0736a;
-  --bad-soft: rgba(240, 115, 106, 0.12);
+  --text: var(--ink);
+  --text-muted: rgba(209, 207, 192, 0.60);
+  --text-faint: rgba(209, 207, 192, 0.38);
 
-  /* Tighter radii read as more precise; the old 14px was rounding towards
-   * consumer-app softness. */
-  --radius: 7px;
-  --radius-lg: 9px;
-  /* Barely-there. Depth comes from borders, not from lifting things. */
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  /* Coral. The one saturated thing on the page, which is what lets it mean
+   * "this is the action" without a second cue. */
+  --accent: #f76f53;
+  --accent-soft: rgba(247, 111, 83, 0.14);
+  --accent-text: #f89078;
 
-  --sidebar-w: 224px;
+  --good: #6fd28c;
+  --good-soft: rgba(111, 210, 140, 0.13);
+  --warn: #e0ad5e;
+  --warn-soft: rgba(224, 173, 94, 0.13);
+  /* Rose rather than orange-red: far enough round the wheel from the coral
+   * accent that a destructive control never reads as the primary one. */
+  --bad: #e5707f;
+  --bad-soft: rgba(229, 112, 127, 0.13);
+
+  /* Softer than the old 7px. Paper does not have sharp corners, and the extra
+   * two pixels are most of the difference between "tool" and "calm tool". */
+  --radius: 9px;
+  --radius-lg: 14px;
+  /* Still essentially none. Depth comes from the hairlines. */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+
+  --sidebar-w: 232px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root[data-theme="light"] {
-  /* The same discipline inverted: near-neutral, borders over shadows. */
-  --bg: #fcfcfc;
-  --bg-raised: #ffffff;
-  --bg-inset: #f6f6f6;
-  --bg-hover: #f1f1f1;
-  --border: #e6e6e6;
-  --border-strong: #d6d6d6;
+  /* Daylight paper: Zen's #f2f0e3 over soft ink. Deliberately not white --
+   * a white page under a warm accent looks like the accent is wrong. */
+  --paper: #f2f0e3;
+  --ink: #2e2e2e;
 
-  --text: #17171a;
-  --text-muted: #5e5e66;
-  --text-faint: #8b8b93;
+  --bg: var(--paper);
+  --bg-raised: #f8f7ee;
+  --bg-inset: #eceadc;
+  --bg-hover: #e7e5d5;
 
-  --accent: #4059d0;
-  --accent-soft: rgba(64, 89, 208, 0.08);
-  --accent-text: #33489f;
+  --border: rgba(46, 46, 46, 0.11);
+  --border-strong: rgba(46, 46, 46, 0.20);
 
-  --good: #2e8b57;
-  --good-soft: rgba(46, 139, 87, 0.1);
-  --warn: #9a6a0c;
-  --warn-soft: rgba(154, 106, 12, 0.1);
-  --bad: #c0392b;
-  --bad-soft: rgba(192, 57, 43, 0.09);
+  --text: var(--ink);
+  --text-muted: rgba(46, 46, 46, 0.62);
+  --text-faint: rgba(46, 46, 46, 0.42);
 
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  /* A shade deeper than the night coral so it holds its weight against cream
+   * rather than glowing off it. `--accent-text` is deeper again, because a
+   * link has to pass contrast as text where a filled button does not. */
+  --accent: #ef6444;
+  --accent-soft: rgba(239, 100, 68, 0.11);
+  --accent-text: #b03d22;
+
+  --good: #2f7d52;
+  --good-soft: rgba(47, 125, 82, 0.10);
+  --warn: #8a6014;
+  --warn-soft: rgba(138, 96, 20, 0.10);
+  --bad: #b0324a;
+  --bad-soft: rgba(176, 50, 74, 0.09);
+
+  --shadow: 0 1px 2px rgba(46, 46, 46, 0.06);
 }
 
 * { box-sizing: border-box; }
@@ -96,8 +125,8 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 13.5px;
-  line-height: 1.55;
-  letter-spacing: -0.006em;
+  line-height: 1.62;
+  letter-spacing: -0.004em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -105,9 +134,12 @@ body {
 a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* Tighter tracking as size grows is what makes a neutral grotesque read as a
+ * display face. Inter at -0.03em and 1.6rem is close enough to the compact
+ * grotesque Zen uses that shipping a webfont would buy very little. */
 h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.02em; }
-h1 { font-size: 1.35rem; }
-h2 { font-size: 1.15rem; }
+h1 { font-size: 1.6rem; letter-spacing: -0.032em; line-height: 1.25; }
+h2 { font-size: 1.15rem; letter-spacing: -0.024em; }
 h3 { font-size: 1rem; }
 
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -128,35 +160,39 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 .shell { display: flex; height: 100%; }
 
+/* Same paper as the page, divided by a hairline. A darker well would make
+ * the nav a separate object; here it is the margin of one sheet. */
 .sidebar {
   width: var(--sidebar-w);
   flex: 0 0 var(--sidebar-w);
   border-right: 1px solid var(--border);
-  background: var(--bg-inset);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
-  padding: 18px 12px 12px;
-  gap: 4px;
+  padding: 22px 14px 14px;
+  gap: 3px;
 }
 
 .brand {
-  display: flex; align-items: center; gap: 9px;
-  padding: 4px 10px 18px;
-  font-weight: 600; font-size: 15px; letter-spacing: -0.02em;
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 10px 22px;
+  font-weight: 600; font-size: 15.5px; letter-spacing: -0.03em;
 }
+/* The only place the accent appears without being pressable. A wordmark is
+ * allowed to be the brand colour; nothing else on the page is. */
 .brand-mark {
-  width: 21px; height: 21px; border-radius: 5px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border-strong);
+  width: 22px; height: 22px; border-radius: 7px;
+  background: var(--accent);
+  border: none;
   display: grid; place-items: center;
-  color: var(--text); font-size: 12px; font-weight: 600;
+  color: #fff; font-size: 12px; font-weight: 700;
   flex: 0 0 auto;
 }
 
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px;
-  border-radius: 8px;
+  padding: 8px 11px;
+  border-radius: var(--radius);
   color: var(--text-muted);
   cursor: pointer;
   border: none; background: none; width: 100%;
@@ -164,7 +200,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
   transition: background 0.13s var(--ease), color 0.13s var(--ease);
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
-.nav-item.active { background: var(--bg-hover); color: var(--text); font-weight: 500; }
+/* Active is a tint of the accent rather than a grey block: on paper, a grey
+ * selection reads as a smudge. */
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.nav-item.active svg { opacity: 1; }
 .nav-item svg { flex: 0 0 auto; opacity: 0.85; }
 
 .nav-spacer { flex: 1; }
@@ -172,7 +215,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 .topbar {
-  height: 54px; flex: 0 0 54px;
+  height: 58px; flex: 0 0 58px;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; gap: 12px;
   padding: 0 22px;
@@ -181,7 +224,20 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .topbar h1 { font-size: 15px; font-weight: 600; }
 .topbar .spacer { flex: 1; }
 
-.content { flex: 1; overflow-y: auto; padding: 26px 22px 60px; }
+/* Wider gutters and a slower entrance. The fade is Zen's; it is 220ms rather
+ * than their two seconds, because this is a tool someone opens forty times a
+ * day and not a page they land on once. */
+.content { flex: 1; overflow-y: auto; padding: 34px 30px 72px; }
+.content-inner > * { animation: rise 0.22s var(--ease) both; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content-inner > * { animation: none; }
+}
 .content-inner { max-width: 940px; margin: 0 auto; }
 .content-inner.wide { max-width: 1180px; }
 
@@ -191,14 +247,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 18px;
+  padding: 20px 22px;
 }
-.card + .card { margin-top: 12px; }
+.card + .card { margin-top: 14px; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  padding: 8px 14px;
-  border-radius: 8px;
+  padding: 8px 15px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
   color: var(--text);
@@ -210,8 +266,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Dark text on the coral, in both themes. White on #f76f53 is roughly 3:1,
+ * which fails AA at this size, and near-black on a warm block is what the
+ * palette this came from actually does. */
 .btn-primary {
-  background: var(--accent); border-color: var(--accent); color: #fff;
+  background: var(--accent); border-color: var(--accent); color: #221d1a;
+  font-weight: 550;
 }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); border-color: var(--accent); }
 
@@ -225,10 +285,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 .input, .textarea, .select {
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 13px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   outline: none;
   transition: border-color 0.13s var(--ease), box-shadow 0.13s var(--ease);
 }
@@ -236,6 +296,26 @@ button, input, textarea, select { font: inherit; color: inherit; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+/* A native select renders with the platform's own chrome -- a grey well and a
+ * system chevron -- which is the one element on the page that ignores the
+ * palette entirely. Drawing the arrow ourselves costs eight lines and is the
+ * difference between "styled app" and "styled app with one stray widget". */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) calc(50% + 1px),
+    calc(100% - 12px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+.select:disabled { cursor: not-allowed; }
+
 .textarea { resize: vertical; min-height: 110px; line-height: 1.6; }
 .input::placeholder, .textarea::placeholder { color: var(--text-faint); }
 
@@ -255,7 +335,15 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .badge-good { background: var(--good-soft); color: var(--good); border-color: transparent; }
 .badge-warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge-bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
-.badge-accent { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+/* Deliberately not the accent. These carry the words a note and a target share
+ * -- data, sitting inches from a real button -- and three coral pills in a row
+ * read as three things you can press. The accent marks action; a readout gets
+ * the quiet treatment. */
+.badge-accent {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
 
 .muted { color: var(--text-muted); }
 .faint { color: var(--text-faint); }
@@ -267,8 +355,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 
-.page-head { margin-bottom: 20px; }
-.page-head p { margin: 5px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.page-head { margin-bottom: 26px; }
+.page-head p { margin: 7px 0 0; color: var(--text-muted); font-size: 13.5px; max-width: 62ch; }
 
 .divider { height: 1px; background: var(--border); margin: 16px 0; border: 0; }
 
@@ -566,7 +654,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .mastery-bar .seg { height: 100%; }
 .mastery-bar .mastered { background: var(--good); }
-.mastery-bar .learning { background: var(--accent); }
+/* Amber, not the accent: this bar is a readout, and the accent means "you can
+ * press this". Two meanings sharing a colour is how a palette stops carrying
+ * information. */
+.mastery-bar .learning { background: var(--warn); }
 .mastery-bar .new { background: var(--border-strong); }
 
 /* Card syntax is easier to see in a monospaced face -- the `::` is the whole
@@ -622,3 +713,25 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .good-text { color: var(--good); }
 .pricing-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
 .pricing-list li { color: var(--text-muted); }
+
+/* ------------------------------------------------------------ deck editor */
+
+.title-input {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  border-color: transparent; background: transparent; padding-left: 0;
+}
+.title-input:hover { border-color: var(--border); }
+.title-input:focus { border-color: var(--border-strong); background: var(--bg-raised); }
+
+.card-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.4fr) 46px;
+  align-items: center; gap: 10px;
+}
+.card-row-num { font-size: 12px; color: var(--text-faint); text-align: right; }
+.card-row-note { text-align: center; }
+.card-row .input:disabled { opacity: 0.75; }
+@media (max-width: 700px) {
+  .card-row { grid-template-columns: 22px minmax(0, 1fr) 40px; }
+  .card-row .input:nth-of-type(2) { grid-column: 2 / 4; }
+}

@@ -25,10 +25,11 @@ other people's. One feature calls a paid model (writing cards from prose you did
 not mark up) and it has a free alternative that does the same job by hand. See
 docs/PRICING.md.
 
-It also connects to Canvas, if you want it to: pull your assignments, and moot
-will tell you which of your notes bear on which assignment, with the evidence
-for each match and a measured claim about how good that matching actually is.
-That started as the whole product and is now an optional integration.
+Name what you are studying for — an exam topic, a syllabus section, a question,
+a pasted assignment brief — and moot tells you which of your notes bear on it,
+quoting the sentence that made each match and scoring how confident it is.
+Canvas can fill those targets in automatically where universities still allow
+student access tokens, but it is one source of them rather than the only way in.
 
 ## Quick start
 
@@ -66,6 +67,19 @@ python scripts/run_worker.py          # processes indexing and sync jobs
 ```
 
 ## What's here
+
+**Match your notes to what you are studying for** — type a topic, an exam
+brief, or a syllabus section and see which of your notes cover it, each with
+the words the two share and the sentence that drove the score. No Canvas and no
+API key: matching runs on the offline embedding provider like everything else
+on the free path. Editing a target re-matches it, and a target you typed is
+never touched by a Canvas sync.
+
+**Three ways to get a deck** — type it in a term/definition grid (Tab across,
+Enter for a row, paste a block and it splits itself), write `::` in a note, or
+have a model read a note. Only the third costs anything. Cards a note declares
+appear in the editor but are not editable there, because the note rewrites them
+on every save and an edit made in the wrong place would silently vanish.
 
 **Canvas integration** — `studylink/canvas.py` pulls courses and assignments over
 the REST API with a personal access token, following Canvas's link-header
@@ -232,7 +246,7 @@ written to the database or logged.
 python -m pytest tests -q
 ```
 
-692 tests, no network, no API keys. Twenty-two more cover the Postgres and
+743 tests, no network, no API keys. Twenty-two more cover the Postgres and
 pgvector paths and skip unless you point them at a server:
 
 ```bash
@@ -257,6 +271,8 @@ covered and the path that produces it in production is not.
   there is no approximate index, and the measurements that would change that.
 - `docs/MULTI_USER.md` -- how rows are scoped to one user, and the four
   decisions behind it.
+- `docs/MATCHING.md` -- how a study target works, why it shares a table with a
+  Canvas assignment, and the indexing compromise behind "matches immediately".
 - `docs/SHARING.md` -- the three visibility states, what a shared card does and
   does not carry, and why unlisted is a different permission from public.
 - `docs/PRICING.md` -- what costs money, who pays it, and what the free path
@@ -289,6 +305,8 @@ Working MVP.
 - [x] Progress scoring: mastery states, streaks, and what needs more practice
 - [x] Public and unlisted decks, semantic deck discovery, and forking
 - [x] Bring-your-own-key, so the paid features cost the operator nothing
+- [x] Study targets: match notes to a topic you name, with no Canvas token
+- [x] Manual deck and card authoring, with a paste-a-block set editor
 - [ ] Import and export (Anki .apkg, Quizlet paste, CSV)
 - [ ] Learn mode and Match
 - [ ] Offline review on a phone (PWA + IndexedDB)

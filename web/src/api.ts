@@ -130,6 +130,14 @@ export interface Course { id: number; name: string; course_code: string | null }
 export interface Assignment {
   id: number; name: string; course: string | null;
   due_at: string | null; points_possible: number | null;
+  description?: string;
+  /** "canvas" for a synced assignment, "manual" for one you typed. */
+  source?: "canvas" | "manual";
+}
+export interface TargetResult extends Assignment {
+  matches: Match[];
+  /** Notes retrieval cannot see yet, so an empty match list can explain itself. */
+  notes_pending?: number;
 }
 export interface Note {
   id: number; title: string; course: string | null;
@@ -207,6 +215,22 @@ export const assignments = {
     api.get<{ assignment: { id: number; name: string }; matches: Match[] }>(
       `/assignments/${id}/matches`
     ),
+};
+
+/**
+ * Study targets: the same rows as assignments, reachable without Canvas.
+ *
+ * Creating one returns its matches in the same response, because typing a
+ * topic and seeing which notes cover it is one action from the user's side.
+ */
+export const targets = {
+  create: (name: string, description = "", due_at?: string | null) =>
+    api.post<TargetResult>("/targets", { name, description, due_at: due_at ?? null }),
+  update: (
+    id: number,
+    patch: { name?: string; description?: string; due_at?: string | null; clear_due?: boolean },
+  ) => api.patch<TargetResult>(`/targets/${id}`, patch),
+  remove: (id: number) => api.del<void>(`/targets/${id}`),
 };
 
 export const jobs = {
@@ -297,6 +321,8 @@ export interface Card {
   id: number;
   deck_id: number;
   note_id: number | null;
+  /** True when a note's `::` line writes this card, so editing it here would be undone. */
+  from_note?: boolean;
   front: string;
   back: string;
   /** The sentence from the note that supports this card. */
@@ -330,6 +356,14 @@ export const decks = {
     api.post<{ deck_id: number; cards: number; rejected: number }>(
       "/decks", { note_id, count: count ?? null, title: title ?? null },
     ),
+  /** An empty deck to type cards into. No note, no model, no key. */
+  createEmpty: (title: string) => api.post<Deck>("/decks", { title }),
+  rename: (id: number, title: string) => api.patch<Deck>(`/decks/${id}`, { title }),
+  addCards: (id: number, cards: { front: string; back: string }[]) =>
+    api.post<Card[]>(`/decks/${id}/cards`, { cards }),
+  editCard: (id: number, patch: { front?: string; back?: string }) =>
+    api.patch<Card>(`/cards/${id}`, patch),
+  removeCard: (id: number) => api.del<void>(`/cards/${id}`),
   remove: (id: number) => api.del<void>(`/decks/${id}`),
   study: (id: number) => api.get<Card[]>(`/decks/${id}/study`),
   review: (cardId: number, grade: number) =>

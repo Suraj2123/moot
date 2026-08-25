@@ -301,12 +301,17 @@ def _assignment_from_row(row) -> Assignment:
         submission_types=row["submission_types"] or "",
         html_url=row["html_url"],
         course_name=row["course_name"] if "course_name" in row else "",
+        source=row["source"] if "source" in row else "canvas",
     )
 
 
 def _assignment_select():
-    return select(assignments, courses.c.name.label("course_name")).join(
-        courses, courses.c.id == assignments.c.course_id
+    # outerjoin, not join. A target a student typed has no course, and an inner
+    # join drops exactly those rows -- silently, from every list, with nothing
+    # in the logs. This is the line that makes course-less targets possible at
+    # all, and it is easy to "tidy" back into a bug.
+    return select(assignments, courses.c.name.label("course_name")).select_from(
+        assignments.outerjoin(courses, courses.c.id == assignments.c.course_id)
     )
 
 
@@ -904,6 +909,11 @@ def _card_from_row(row) -> dict:
         "note_id": row["note_id"],
         "front": row["front"],
         "back": row["back"],
+        # Whether a note's `::` line writes this card, which decides whether an
+        # editor may offer to change it. A boolean rather than the source_key
+        # itself: the hash is an internal identity and the caller only needs
+        # the fact.
+        "from_note": bool(row["source_key"]) if "source_key" in row else False,
         "evidence": row["evidence"] or "",
         "due_at": _iso(row["due_at"]),
         "interval_days": row["interval_days"],
@@ -1399,3 +1409,215 @@ def deck_text_for_search(conn: Connection, deck_id: int) -> str:
         words.append(str(front or ""))
         words.append(str(back or ""))
     return " ".join(w for w in words if w).strip()
+
+
+# ------------------------------------------------------- writing cards by hand
+
+
+def rename_deck(conn: Connection, deck_id: int, user_id: int, title: str) -> Optional[dict]:
+    with transaction(conn):
+        conn.execute(
+            update(decks)
+            .where(decks.c.id == deck_id, decks.c.user_id == user_id)
+            .values(title=title)
+        )
+    return get_deck(conn, deck_id, user_id)
+
+
+def write_cards(
+    conn: Connection, user_id: int, deck_id: int, pairs: Iterable[tuple[str, str]]
+) -> list[int]:
+    """Add cards somebody typed, rather than cards derived from anything.
+
+    These carry no `source_key`, and that absence is what protects them: the
+    note sync builds its "cards I own" set from rows that have one, so a card
+    typed by hand into a note's deck is invisible to the sync and survives
+    every re-derivation of that note. A student who adds one extra card to a
+    deck their notes wrote should not lose it the next time they fix a typo.
+    """
+    now = _now()
+    ids = []
+    with transaction(conn):
+        for front, back in pairs:
+            front = (front or "").strip()
+            back = (back or "").strip()
+            if not front or not back:
+                # A half-filled row is what an editor looks like mid-typing,
+                # not a card. Skipping beats storing a card that can never be
+                # answered.
+                continue
+            result = conn.execute(
+                insert(cards).values(
+                    user_id=user_id, deck_id=deck_id, note_id=None,
+                    front=front, back=back, evidence="", source_key=None,
+                    created_at=now, due_at=now,
+                    interval_days=0, ease=250, reviews=0, lapses=0,
+                )
+            )
+            ids.append(int(result.inserted_primary_key[0]))
+    return ids
+
+
+def update_card(
+    conn: Connection, card_id: int, user_id: int,
+    front: Optional[str] = None, back: Optional[str] = None,
+) -> Optional[dict]:
+    """Edit a card's text, leaving its schedule alone.
+
+    Fixing a typo is not evidence that the student has forgotten the card, so
+    the interval, ease, and review count are untouched. This is the same rule
+    the note sync follows when a note's answer changes.
+    """
+    values = {}
+    if front is not None and front.strip():
+        values["front"] = front.strip()
+    if back is not None and back.strip():
+        values["back"] = back.strip()
+    if values:
+        with transaction(conn):
+            conn.execute(
+                update(cards)
+                .where(cards.c.id == card_id, cards.c.user_id == user_id)
+                .values(**values)
+            )
+    return get_card(conn, card_id, user_id)
+
+
+def delete_card(conn: Connection, card_id: int, user_id: int) -> None:
+    with transaction(conn):
+        conn.execute(
+            delete(cards).where(cards.c.id == card_id, cards.c.user_id == user_id)
+        )
+
+
+def card_origin(conn: Connection, card_id: int, user_id: int) -> Optional[dict]:
+    """Whether this card is written by a note, and which one.
+
+    Editing a card that a note declares is a lie: the next save of that note
+    re-derives it and the edit disappears. Callers use this to refuse the edit
+    and say where the real text lives, rather than accepting it and silently
+    reverting later.
+    """
+    row = conn.execute(
+        select(
+            cards.c.source_key,
+            decks.c.source,
+            decks.c.note_id,
+            notes.c.title.label("note_title"),
+        )
+        .select_from(
+            cards.join(decks, decks.c.id == cards.c.deck_id)
+            .outerjoin(notes, notes.c.id == decks.c.note_id)
+        )
+        .where(cards.c.id == card_id, cards.c.user_id == user_id)
+    ).mappings().first()
+    if not row:
+        return None
+    derived = bool(row["source_key"]) and row["source"] == "note"
+    return {
+        "derived": derived,
+        "note_id": row["note_id"],
+        "note_title": row["note_title"] or "",
+    }
+
+
+# ------------------------------------------------------------ study targets
+
+
+def create_target(
+    conn: Connection,
+    user_id: int,
+    name: str,
+    description: str = "",
+    due_at: Optional[str] = None,
+    course_id: Optional[int] = None,
+) -> int:
+    """A thing to study for, written by the student rather than synced.
+
+    Structurally the same row as a Canvas assignment, because it is the same
+    question -- "which of my notes bear on this text?" -- and the retriever,
+    the evidence layer, and the evaluation harness are all built around that
+    row already. What differs is provenance, and `source` carries it: a sync
+    replaces what it synced and must never touch what somebody typed.
+
+    `canvas_id` stays NULL. Both backends treat NULLs as distinct in a unique
+    index, so any number of manual targets coexist under the constraint that
+    keeps synced assignments unique per course.
+    """
+    now = _now()
+    with transaction(conn):
+        result = conn.execute(
+            insert(assignments).values(
+                user_id=user_id,
+                canvas_id=None,
+                course_id=course_id,
+                source="manual",
+                name=(name or "").strip() or "Untitled target",
+                description=description or "",
+                due_at=due_at,
+                points_possible=None,
+                submission_types="",
+                html_url=None,
+                synced_at=now,
+            )
+        )
+    return int(result.inserted_primary_key[0])
+
+
+def update_target(
+    conn: Connection,
+    target_id: int,
+    user_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    due_at: Optional[str] = None,
+    clear_due: bool = False,
+) -> Optional[Assignment]:
+    """Edit a typed target. Refuses to touch a synced one.
+
+    A Canvas assignment is a copy of something owned elsewhere; editing it here
+    would produce a local version that the next sync silently overwrites, which
+    is the same trap as editing a card that a note writes.
+    """
+    values: dict[str, Any] = {}
+    if name is not None and name.strip():
+        values["name"] = name.strip()
+    if description is not None:
+        values["description"] = description
+    if clear_due:
+        values["due_at"] = None
+    elif due_at is not None:
+        values["due_at"] = due_at
+
+    if values:
+        with transaction(conn):
+            conn.execute(
+                update(assignments)
+                .where(
+                    assignments.c.id == target_id,
+                    assignments.c.user_id == user_id,
+                    assignments.c.source == "manual",
+                )
+                .values(**values)
+            )
+    return get_assignment(conn, target_id, user_id)
+
+
+def delete_target(conn: Connection, target_id: int, user_id: int) -> None:
+    with transaction(conn):
+        conn.execute(
+            delete(assignments).where(
+                assignments.c.id == target_id,
+                assignments.c.user_id == user_id,
+                assignments.c.source == "manual",
+            )
+        )
+
+
+def assignment_source(conn: Connection, target_id: int, user_id: int) -> Optional[str]:
+    row = conn.execute(
+        select(assignments.c.source).where(
+            assignments.c.id == target_id, assignments.c.user_id == user_id
+        )
+    ).first()
+    return str(row[0]) if row else None

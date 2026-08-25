@@ -216,6 +216,19 @@ class AskIn(BaseModel):
     history: list[dict] = Field(default_factory=list)
 
 
+class TargetIn(BaseModel):
+    name: str
+    description: str = ""
+    due_at: Optional[str] = None
+
+
+class TargetPatchIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    due_at: Optional[str] = None
+    clear_due: bool = False
+
+
 class CanvasConnectIn(BaseModel):
     api_url: str
     api_token: str
@@ -227,7 +240,9 @@ class PasswordChangeIn(BaseModel):
 
 
 class DeckIn(BaseModel):
-    note_id: int
+    # Absent means "an empty deck I will type into"; present means "read this
+    # note and write the cards for me".
+    note_id: Optional[int] = None
     # A ceiling, not a target, and omitting it is the normal case: the note
     # decides how many cards it can support. See cards.suggest_count.
     count: Optional[int] = Field(default=None, ge=1, le=20)
@@ -235,7 +250,24 @@ class DeckIn(BaseModel):
 
 
 class DeckPatchIn(BaseModel):
-    visibility: str
+    """A PATCH says what changed, so both fields are optional."""
+
+    visibility: Optional[str] = None
+    title: Optional[str] = None
+
+
+class CardIn(BaseModel):
+    front: str = ""
+    back: str = ""
+
+
+class CardsIn(BaseModel):
+    cards: list[CardIn] = Field(default_factory=list)
+
+
+class CardPatchIn(BaseModel):
+    front: Optional[str] = None
+    back: Optional[str] = None
 
 
 class ModelKeyIn(BaseModel):
@@ -605,20 +637,84 @@ def list_courses(app: StudyLink = Depends(current_app)) -> list[dict]:
     ]
 
 
+def _target(a) -> dict:
+    return {
+        "id": a.id,
+        "name": a.name,
+        "description": a.description,
+        "course": a.course_name,
+        "due_at": a.due_at,
+        "points_possible": a.points_possible,
+        # Which of these a student may edit, and which the next sync owns.
+        "source": a.source,
+    }
+
+
 @api.get("/assignments")
 def list_assignments(
     course_id: Optional[int] = None, app: StudyLink = Depends(current_app)
 ) -> list[dict]:
-    return [
-        {
-            "id": a.id,
-            "name": a.name,
-            "course": a.course_name,
-            "due_at": a.due_at,
-            "points_possible": a.points_possible,
-        }
-        for a in app.list_assignments(course_id)
-    ]
+    return [_target(a) for a in app.list_assignments(course_id)]
+
+
+# --------------------------------------------------------------- study targets
+#
+# The same rows as `/assignments`, under the name that describes what they are
+# for. Matching notes against a piece of text was reachable only by connecting
+# Canvas, because nothing outside the syncer ever wrote one of these rows --
+# so the part of this product with the evidence layer and the measured
+# retrieval behind it did nothing at all for a student whose university
+# disables access tokens. Canvas is now one source of targets rather than the
+# only one.
+
+
+@api.post("/targets", status_code=201)
+def create_target(payload: TargetIn, app: StudyLink = Depends(current_app)) -> dict:
+    """Name something to study for, and get the notes that bear on it.
+
+    The matches come back with the target rather than needing a second call.
+    Typing a topic and immediately seeing which of your notes cover it is the
+    whole point; a two-step version reads as a form that saved something.
+    """
+    target = app.create_target(
+        payload.name, description=payload.description, due_at=payload.due_at
+    )
+    return {
+        **_target(target),
+        "matches": [m.as_dict() for m in app.matches_for_assignment(target.id)],
+        # So an empty match list can say "still indexing" rather than "nothing
+        # of yours is about this", which are very different messages.
+        "notes_pending": app.pending_notes(),
+    }
+
+
+@api.patch("/targets/{target_id}")
+def update_target(
+    target_id: int, payload: TargetPatchIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    try:
+        target = app.update_target(
+            target_id,
+            name=payload.name,
+            description=payload.description,
+            due_at=payload.due_at,
+            clear_due=payload.clear_due,
+        )
+    except CanvasError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        **_target(target),
+        "matches": [m.as_dict() for m in app.matches_for_assignment(target.id)],
+    }
+
+
+@api.delete("/targets/{target_id}", status_code=204)
+def delete_target(target_id: int, app: StudyLink = Depends(current_app)) -> Response:
+    try:
+        app.delete_target(target_id)
+    except CanvasError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 
 @api.get("/assignments/{assignment_id}/matches")
@@ -1108,12 +1204,22 @@ def work_session(
 
 @api.post("/decks", status_code=201)
 def create_deck(payload: DeckIn, app: StudyLink = Depends(current_app)) -> dict:
-    """Generate a deck of flashcards from one note.
+    """Make a deck. Two sources, discriminated by what the payload carries.
 
-    `rejected` is part of the response on purpose. Cards that could not be
-    traced to a sentence in the note are dropped, and saying how many were
-    dropped is a measurable groundedness signal rather than a promise.
+    With no `note_id`, an empty deck with a title -- the route for typing cards
+    in by hand, which needs no note and no API key. With a `note_id`, the model
+    reads that note and writes the cards.
+
+    One route rather than two because "create a deck" is one action from the
+    caller's side, and the difference is where the cards come from.
+
+    `rejected` is part of the generated response on purpose. Cards that could
+    not be traced to a sentence in the note are dropped, and saying how many
+    were dropped is a measurable groundedness signal rather than a promise.
     """
+    if payload.note_id is None:
+        return app.create_empty_deck(payload.title or "")
+
     try:
         return app.make_deck_from_note(
             payload.note_id, count=payload.count, title=payload.title
@@ -1149,13 +1255,64 @@ def delete_deck(deck_id: int, app: StudyLink = Depends(current_app)) -> Response
 def update_deck(
     deck_id: int, payload: DeckPatchIn, app: StudyLink = Depends(current_app)
 ) -> dict:
-    """Change who can read a deck."""
-    if payload.visibility not in store.VISIBILITIES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"visibility must be one of {', '.join(store.VISIBILITIES)}",
-        )
-    return app.set_deck_visibility(deck_id, payload.visibility)
+    """Rename a deck, change who can read it, or both."""
+    deck = None
+    if payload.title is not None:
+        deck = app.rename_deck(deck_id, payload.title)
+    if payload.visibility is not None:
+        if payload.visibility not in store.VISIBILITIES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"visibility must be one of {', '.join(store.VISIBILITIES)}",
+            )
+        deck = app.set_deck_visibility(deck_id, payload.visibility)
+    if deck is None:
+        # Nothing named, so nothing changed. Returning the deck is friendlier
+        # than a 422 about an empty patch.
+        deck = app.get_deck(deck_id)
+        if deck is None:
+            raise HTTPException(status_code=404, detail="not found")
+    return deck
+
+
+@api.post("/decks/{deck_id}/cards", status_code=201)
+def add_cards(
+    deck_id: int, payload: CardsIn, app: StudyLink = Depends(current_app)
+) -> list[dict]:
+    """Type cards into a deck.
+
+    Takes a list rather than one card, because the way people actually write a
+    set is a row at a time in a grid and then a save -- and because pasting a
+    block of term/definition lines is the fastest route out of another app.
+
+    Rows missing a front or a back are skipped rather than refused: a
+    half-filled row is what an editor looks like mid-typing, not an error.
+    """
+    return app.add_cards(
+        deck_id, [(card.front, card.back) for card in payload.cards]
+    )
+
+
+@api.patch("/cards/{card_id}")
+def edit_card(
+    card_id: int, payload: CardPatchIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    """Fix a card's text. The schedule is left alone -- a typo is not a lapse."""
+    try:
+        return app.edit_card(card_id, front=payload.front, back=payload.back)
+    except cards_module.CardError as exc:
+        # 409, not 422: the request is well-formed and the card exists. What
+        # refuses it is that a note owns this text.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api.delete("/cards/{card_id}", status_code=204)
+def delete_card(card_id: int, app: StudyLink = Depends(current_app)) -> Response:
+    try:
+        app.remove_card(card_id)
+    except cards_module.CardError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------- shared decks

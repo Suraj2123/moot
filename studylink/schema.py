@@ -244,13 +244,18 @@ assignments = Table(
     Column("id", Integer, primary_key=True),
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True),
     Column("canvas_id", String(64)),
+    # Null for a target a student typed. Canvas is one source of these rows,
+    # not the only one -- a topic written before an exam belongs to no course.
     Column(
         "course_id",
         Integer,
         ForeignKey("courses.id", ondelete="CASCADE"),
-        nullable=False,
         index=True,
     ),
+    # "canvas" (synced, and overwritten by the next sync) or "manual" (typed,
+    # and never touched by a sync). Without the distinction the syncer cannot
+    # tell what it is allowed to replace.
+    Column("source", String(16), nullable=False, default="canvas", index=True),
     Column("name", Text, nullable=False),
     Column("description", Text, default=""),
     Column("due_at", String(64)),
