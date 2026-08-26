@@ -139,9 +139,14 @@ export interface TargetResult extends Assignment {
   /** Notes retrieval cannot see yet, so an empty match list can explain itself. */
   notes_pending?: number;
 }
+export interface Folder {
+  id: number; name: string; notes: number; created_at: string;
+}
 export interface Note {
   id: number; title: string; course: string | null;
   source_type: string; chars: number;
+  folder_id?: number | null;
+  folder?: string;
   /** Whether retrieval can see this note yet. */
   index_status?: "indexed" | "queued" | "stale";
 }
@@ -193,10 +198,20 @@ export const auth = {
 };
 
 export const notes = {
-  list: (search = "") =>
-    api.get<Note[]>(`/notes${search ? `?search=${encodeURIComponent(search)}` : ""}`),
-  create: (title: string, body: string, course_id?: number | null) =>
-    api.post<{ id: number; job: Job }>("/notes", { title, body, course_id: course_id ?? null }),
+  list: (search = "", opts: { folderId?: number | null; unfiled?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (search) q.set("search", search);
+    if (opts.folderId != null) q.set("folder_id", String(opts.folderId));
+    if (opts.unfiled) q.set("unfiled", "true");
+    const qs = q.toString();
+    return api.get<Note[]>(`/notes${qs ? `?${qs}` : ""}`);
+  },
+  create: (title: string, body: string, course_id?: number | null, folder_id?: number | null) =>
+    api.post<{ id: number; job: Job }>("/notes", {
+      title, body, course_id: course_id ?? null, folder_id: folder_id ?? null,
+    }),
+  move: (id: number, folder_id: number | null) =>
+    api.post<{ note_id: number; folder_id: number | null }>(`/notes/${id}/folder`, { folder_id }),
   assignmentsFor: (id: number) => api.get<Match[]>(`/notes/${id}/assignments`),
   /** Only the fields present are changed; `reindexed` says whether the text moved. */
   update: (
@@ -231,6 +246,13 @@ export const targets = {
     patch: { name?: string; description?: string; due_at?: string | null; clear_due?: boolean },
   ) => api.patch<TargetResult>(`/targets/${id}`, patch),
   remove: (id: number) => api.del<void>(`/targets/${id}`),
+};
+
+export const folders = {
+  list: () => api.get<Folder[]>("/folders"),
+  create: (name: string) => api.post<Folder>("/folders", { name }),
+  rename: (id: number, name: string) => api.patch<Folder>(`/folders/${id}`, { name }),
+  remove: (id: number) => api.del<void>(`/folders/${id}`),
 };
 
 export const jobs = {

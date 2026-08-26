@@ -76,7 +76,11 @@
   /* Still essentially none. Depth comes from the hairlines. */
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
 
-  --sidebar-w: 232px;
+  /* The extrude behind the wordmark. Muted rather than a second colour: the
+   * logo is one word with depth, not two-tone. */
+  --wordmark-shadow: rgba(209, 207, 192, 0.22);
+
+  --rail-w: 56px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -113,6 +117,7 @@
   --bad-soft: rgba(176, 50, 74, 0.09);
 
   --shadow: 0 1px 2px rgba(46, 46, 46, 0.06);
+  --wordmark-shadow: rgba(46, 46, 46, 0.24);
 }
 
 * { box-sizing: border-box; }
@@ -163,8 +168,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 /* Same paper as the page, divided by a hairline. A darker well would make
  * the nav a separate object; here it is the margin of one sheet. */
 .sidebar {
-  width: var(--sidebar-w);
-  flex: 0 0 var(--sidebar-w);
+  width: 232px;
+  flex: 0 0 232px;
   border-right: 1px solid var(--border);
   background: var(--bg);
   display: flex;
@@ -734,4 +739,178 @@ button, input, textarea, select { font: inherit; color: inherit; }
 @media (max-width: 700px) {
   .card-row { grid-template-columns: 22px minmax(0, 1fr) 40px; }
   .card-row .input:nth-of-type(2) { grid-column: 2 / 4; }
+}
+
+/* --------------------------------------------------------------- wordmark */
+
+.wordmark {
+  font-weight: 800;
+  letter-spacing: -0.055em;
+  line-height: 1;
+  color: var(--text);
+  display: inline-block;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------------- rail */
+
+/* As narrow as a comfortable touch target and no narrower. Everything you
+ * navigate to lives on the hub; what is left here is the two things that are
+ * never the reason you opened the app. */
+.rail {
+  width: var(--rail-w);
+  flex: 0 0 var(--rail-w);
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 6px;
+}
+.rail-spacer { flex: 1; }
+
+.rail-home {
+  width: 32px; height: 32px;
+  border: none; border-radius: 9px;
+  background: var(--accent);
+  color: #221d1a;
+  font-weight: 800; font-size: 15px; letter-spacing: -0.04em;
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: transform 0.12s var(--ease);
+}
+.rail-home:hover { transform: translateY(-1px); }
+
+.rail-btn {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: none; background: none; border-radius: 9px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease);
+}
+.rail-btn:hover { background: var(--bg-hover); color: var(--text); }
+.rail-btn.active { background: var(--accent-soft); color: var(--accent-text); }
+
+/* -------------------------------------------------------------------- hub */
+
+.hub { max-width: 760px; margin: 0 auto; padding-top: 18px; }
+.hub-head { text-align: center; margin-bottom: 34px; }
+.hub-head p { margin: 18px 0 0; color: var(--text-muted); font-size: 14.5px; }
+
+.tiles { display: grid; gap: 10px; }
+
+.tile {
+  display: flex; align-items: flex-start; gap: 14px;
+  width: 100%; text-align: left;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.13s var(--ease), background 0.13s var(--ease),
+    transform 0.1s var(--ease);
+}
+.tile:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.tile:active { transform: none; }
+
+.tile-icon {
+  flex: 0 0 auto; margin-top: 1px;
+  color: var(--text-faint);
+}
+.tile:hover .tile-icon { color: var(--accent); }
+.tile-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.tile-title {
+  font-weight: 600; font-size: 14.5px; letter-spacing: -0.015em;
+  display: flex; align-items: center; gap: 9px;
+}
+.tile-blurb { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+.tile-count {
+  flex: 0 0 auto; align-self: center;
+  color: var(--text-faint); font-size: 12.5px; white-space: nowrap;
+}
+
+/* Still pressable -- it opens a page that explains itself -- but visibly not
+ * one of the working ones. */
+.tile-soon { background: none; }
+.tile-soon .tile-title { color: var(--text-muted); }
+.tile-badge { font-size: 10.5px; }
+
+/* ------------------------------------------------------------------ mooty */
+
+.mooty {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 28px; padding: 9px 10px 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-raised);
+}
+.mooty:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mooty-mark {
+  flex: 0 0 auto;
+  width: 24px; height: 24px; border-radius: 999px;
+  background: var(--accent); color: #221d1a;
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 13px; letter-spacing: -0.04em;
+}
+.mooty-input {
+  border: none; background: none; padding: 0;
+  flex: 1; min-width: 0;
+}
+.mooty-input:focus { border: none; box-shadow: none; }
+.mooty-note { margin: 10px 4px 0; text-align: center; }
+
+.community-foot { margin-top: 34px; text-align: center; opacity: 0.5; }
+
+.topbar-user { margin-left: auto; }
+
+@media (max-width: 700px) {
+  .hub-head { margin-bottom: 24px; }
+  .tile-count { display: none; }
+  .topbar-user { display: none; }
+}
+
+.auth-brand { text-align: center; margin-bottom: 26px; }
+.auth-brand p { margin: 16px 0 0; }
+
+/* ---------------------------------------------------------------- folders */
+
+.folder-bar { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+.chip {
+  display: inline-flex; align-items: center;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  border-radius: 999px;
+  font-size: 12.5px;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.13s var(--ease), color 0.13s var(--ease),
+    background 0.13s var(--ease);
+}
+button.chip { padding: 5px 12px; }
+.chip:hover { border-color: var(--border-strong); color: var(--text); }
+.chip.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-text);
+}
+.chip-main {
+  border: none; background: none; color: inherit; cursor: pointer;
+  padding: 5px 4px 5px 12px; font: inherit;
+}
+.chip-count { opacity: 0.55; margin-left: 3px; }
+.chip-x {
+  border: none; background: none; color: inherit; cursor: pointer;
+  padding: 5px 10px 5px 4px; font-size: 14px; line-height: 1; opacity: 0.5;
+}
+.chip-x:hover { opacity: 1; color: var(--bad); }
+.chip-add { border-style: dashed; }
+.chip-adding { padding: 0 6px; }
+.chip-input {
+  border: none; background: none; outline: none; color: var(--text);
+  font: inherit; padding: 5px 6px; width: 120px;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  notes, jobs, ApiError, uploadNote, UPLOAD_ACCEPT, UPLOAD_MAX_BYTES,
-  type Job, type Note, type Match,
+  notes, folders, jobs, ApiError, uploadNote, UPLOAD_ACCEPT, UPLOAD_MAX_BYTES,
+  type Folder, type Job, type Note, type Match,
 } from "../api";
 import { Alert, Empty, Skeleton, ConfidenceBadge, ScoreBar } from "../components/ui";
 import { OutlineEditor } from "../components/OutlineEditor";
@@ -16,6 +16,15 @@ export function NotesPage() {
   const [open, setOpen] = useState<number | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  // null is "everything"; a number is one folder; "unfiled" is the notes that
+  // are in none. Three states, because "unfiled" is a place people look.
+  const [folder, setFolder] = useState<number | "unfiled" | null>(null);
+  const [folderList, setFolderList] = useState<Folder[]>([]);
+
+  async function loadFolders() {
+    try { setFolderList(await folders.list()); } catch { /* the list still works */ }
+  }
+  useEffect(() => { loadFolders(); }, []);
 
   async function remove(note: Note) {
     if (!window.confirm(`Delete "${note.title}"? This cannot be undone.`)) return;
@@ -37,9 +46,12 @@ export function NotesPage() {
     }
   }
 
-  async function load(term = search) {
+  async function load(term = search, where = folder) {
     try {
-      setItems(await notes.list(term));
+      setItems(await notes.list(term, {
+        folderId: typeof where === "number" ? where : undefined,
+        unfiled: where === "unfiled",
+      }));
       setError("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load notes.");
@@ -50,17 +62,24 @@ export function NotesPage() {
 
   // Debounced so typing does not fire a request per keystroke.
   useEffect(() => {
-    const t = setTimeout(() => load(search), 220);
+    const t = setTimeout(() => load(search, folder), 220);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, folder]);
 
   return (
     <div className="content-inner">
       <div className="page-head between">
         <div>
           <h1>Notes</h1>
-          <p>Everything you have written, and what each note is relevant to.</p>
+          <p>Everything you have written, filed how you like it.</p>
         </div>
+
+      <FolderBar
+        folders={folderList}
+        active={folder}
+        onPick={setFolder}
+        onChanged={() => { loadFolders(); load(search, folder); }}
+      />
         <div className="row">
           <button className="btn btn-ghost" onClick={() => setUploading((v) => !v)}>
             <IconUpload /> Upload
@@ -79,6 +98,7 @@ export function NotesPage() {
 
       {composing ? (
         <NoteComposer
+          folderId={typeof folder === "number" ? folder : null}
           onDone={() => { setComposing(false); load(); }}
           onCancel={() => setComposing(false)}
         />
@@ -388,7 +408,14 @@ function Uploader({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
   );
 }
 
-function NoteComposer({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+/**
+ * `folderId` is whichever folder the list is filtered to. Writing a note while
+ * looking at "Biology" and having it land unfiled is the kind of small
+ * betrayal that makes people stop trusting the filing.
+ */
+function NoteComposer({
+  onDone, onCancel, folderId = null,
+}: { onDone: () => void; onCancel: () => void; folderId?: number | null }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -399,7 +426,7 @@ function NoteComposer({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     setBusy(true);
     setError("");
     try {
-      const result = await notes.create(title.trim(), body.trim());
+      const result = await notes.create(title.trim(), body.trim(), null, folderId);
       // Indexing runs in the background, so the note is saved but not yet
       // searchable. Saying so beats a spinner that implies otherwise.
       setQueued(result.job?.id ?? null);
@@ -496,4 +523,113 @@ export function JobsStrip() {
   }, []);
   if (!items.some((j) => j.status === "queued" || j.status === "running")) return null;
   return <span className="badge badge-accent">Indexing…</span>;
+}
+
+/* ---------------------------------------------------------------- folders */
+
+/**
+ * The folder strip.
+ *
+ * A row of chips rather than a second sidebar: the app just lost its nav rail
+ * on purpose, and putting a permanent tree back on the left would undo that
+ * for the one screen most likely to have many items.
+ *
+ * "Unfiled" is a real destination and not a gap. Notes start there, most stay
+ * there, and hiding them behind "All" would make filing feel compulsory.
+ */
+function FolderBar({
+  folders: list, active, onPick, onChanged,
+}: {
+  folders: Folder[];
+  active: number | "unfiled" | null;
+  onPick: (next: number | "unfiled" | null) => void;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+
+  async function create() {
+    if (!name.trim()) return;
+    try {
+      const made = await folders.create(name.trim());
+      setName("");
+      setAdding(false);
+      onChanged();
+      onPick(made.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not make that folder.");
+    }
+  }
+
+  async function remove(folder: Folder) {
+    const warning =
+      folder.notes > 0
+        ? `Delete "${folder.name}"? Its ${folder.notes} note${folder.notes === 1 ? "" : "s"} will stay, unfiled.`
+        : `Delete "${folder.name}"?`;
+    if (!window.confirm(warning)) return;
+    try {
+      await folders.remove(folder.id);
+      if (active === folder.id) onPick(null);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not delete that folder.");
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {error ? <Alert>{error}</Alert> : null}
+      <div className="folder-bar">
+        <button
+          className={`chip${active === null ? " active" : ""}`}
+          onClick={() => onPick(null)}
+        >
+          All notes
+        </button>
+        {list.map((folder) => (
+          <span key={folder.id} className={`chip${active === folder.id ? " active" : ""}`}>
+            <button className="chip-main" onClick={() => onPick(folder.id)}>
+              {folder.name} <span className="chip-count">{folder.notes}</span>
+            </button>
+            <button
+              className="chip-x"
+              onClick={() => remove(folder)}
+              aria-label={`Delete folder ${folder.name}`}
+              title="Delete folder — the notes stay"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <button
+          className={`chip${active === "unfiled" ? " active" : ""}`}
+          onClick={() => onPick("unfiled")}
+        >
+          Unfiled
+        </button>
+
+        {adding ? (
+          <span className="chip chip-adding">
+            <input
+              className="chip-input"
+              value={name}
+              autoFocus
+              placeholder="Folder name"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") create();
+                if (e.key === "Escape") { setAdding(false); setName(""); }
+              }}
+              onBlur={() => { if (!name.trim()) setAdding(false); }}
+            />
+          </span>
+        ) : (
+          <button className="chip chip-add" onClick={() => setAdding(true)}>
+            + New folder
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
