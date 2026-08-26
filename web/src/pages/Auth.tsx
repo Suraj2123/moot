@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { auth, setToken, ApiError, type User } from "../api";
 import { Alert, Spinner } from "../components/ui";
+import { Wordmark } from "../components/Wordmark";
 
 export function AuthPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -32,8 +33,11 @@ export function AuthPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="brand">
-          <span className="brand-mark">m</span> moot
+        {/* The logo at full size, because this is the one screen where moot
+            has to introduce itself rather than get out of the way. */}
+        <div className="auth-brand">
+          <Wordmark size={64} />
+          <p className="small faint">Your notes are your flashcards.</p>
         </div>
 
         <div className="card">
