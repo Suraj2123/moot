@@ -49,7 +49,12 @@ function Prose({ text, answer }: { text: string; answer?: AnswerPayload }) {
   );
 }
 
-export function ChatPage() {
+/**
+ * `initialQuestion` is what somebody typed into Mooty on the hub. It is sent
+ * once, on mount, rather than dropped into the composer for them to press
+ * enter on again -- they already pressed enter.
+ */
+export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } = {}) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,6 +67,13 @@ export function ChatPage() {
   }, [turns]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Deliberately keyed on nothing: a question handed over from the hub is sent
+  // exactly once, when this page appears with one.
+  useEffect(() => {
+    if (initialQuestion.trim()) send(initialQuestion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -96,7 +108,14 @@ export function ChatPage() {
             // would otherwise leave a subtly truncated answer on screen.
             if (event.answer?.text) last.content = event.answer.text;
           } else if (event.type === "error") {
-            last.content = last.content || "Something went wrong generating that answer.";
+            // The server sends the reason -- out of credit, key rejected,
+            // rate limited -- and every one of those is something the reader
+            // can act on. Replacing it with "something went wrong" throws
+            // away the only useful part of the failure.
+            last.content =
+              last.content ||
+              event.message ||
+              "Something went wrong generating that answer.";
             last.streaming = false;
           }
           next[next.length - 1] = last;
@@ -120,11 +139,11 @@ export function ChatPage() {
           {turns.length === 0 ? (
             <div style={{ paddingTop: 40 }}>
               <h1 style={{ fontFamily: "var(--font-prose)", fontSize: 30, marginBottom: 8 }}>
-                Ask your notes
+                Ask Mooty
               </h1>
               <p className="muted" style={{ marginTop: 0, maxWidth: 460 }}>
-                Answers come only from what you have written, with the note each claim
-                came from. If your notes do not cover it, it will say so rather than guess.
+                Mooty answers only from what you have written, with the note each claim
+                came from. If your notes do not cover it, it says so rather than guessing.
               </p>
               <div className="stack" style={{ marginTop: 22, maxWidth: 460 }}>
                 {SUGGESTIONS.map((s) => (
@@ -187,7 +206,7 @@ export function ChatPage() {
         <div className="composer-inner">
           <textarea
             className="textarea"
-            placeholder="Ask something about your notes…"
+            placeholder="Ask Mooty about your notes…"
             value={question}
             rows={1}
             disabled={busy}

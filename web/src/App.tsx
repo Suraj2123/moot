@@ -4,49 +4,49 @@ import { AuthPage } from "./pages/Auth";
 import { ChatPage } from "./pages/Chat";
 import { NotesPage } from "./pages/Notes";
 import { StudyPage } from "./pages/Study";
+import { TestMenuPage } from "./pages/TestMenu";
 import { AssignmentsPage } from "./pages/Assignments";
 import { SettingsPage } from "./pages/Settings";
 import { SharedDeckPage } from "./pages/SharedDeck";
 import { DiscoverPage } from "./pages/Discover";
-import {
-  IconAssignments, IconCards, IconChat, IconMenu, IconMoon,
-  IconNotes, IconSearch, IconSettings, IconSun,
-} from "./components/Icons";
+import { CommunityPage } from "./pages/Community";
+import { HomePage, type Destination } from "./pages/Home";
+import { Wordmark } from "./components/Wordmark";
+import { IconMoon, IconSettings, IconSun } from "./components/Icons";
 import { Spinner } from "./components/ui";
 
-type Tab = "chat" | "notes" | "study" | "discover" | "assignments" | "settings";
+type Screen = "home" | Destination | "settings";
+
+const TITLES: Record<Screen, string> = {
+  home: "moot",
+  study: "Flashcards",
+  notes: "Notes",
+  test: "Practice test",
+  match: "Match",
+  chat: "Ask Mooty",
+  discover: "Find a deck",
+  community: "moot community",
+  settings: "Settings",
+};
 
 /**
  * The one URL-driven route in an otherwise state-driven app.
  *
  * A share link has to be a real URL -- that is what makes it shareable -- so
- * `/d/{slug}` is read from the address bar rather than from component state.
- * Everything else stays tab state, because no other screen in this app is
- * worth linking to from outside it.
+ * `/d/{slug}` is read from the address bar. Everything else is screen state,
+ * because no other view here is worth linking to from outside the app.
  */
 function sharedSlug(): string | null {
   const match = window.location.pathname.match(/^\/d\/([^/]+)\/?$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-// Order is the product's opinion about what this app is for. Notes and the
-// cards they declare come first; Ask and Assignments are the two features that
-// need an API key or a Canvas connection, so they sit below the ones that
-// always work.
-const TABS: { id: Tab; label: string; icon: () => JSX.Element; title: string }[] = [
-  { id: "study", label: "Study", icon: IconCards, title: "Study" },
-  { id: "notes", label: "Notes", icon: IconNotes, title: "Notes" },
-  { id: "discover", label: "Discover", icon: IconSearch, title: "Public decks" },
-  { id: "chat", label: "Ask", icon: IconChat, title: "Ask your notes" },
-  { id: "assignments", label: "Match", icon: IconAssignments, title: "Match notes to what you are studying for" },
-  { id: "settings", label: "Settings", icon: IconSettings, title: "Settings" },
-];
-
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState<Tab>("study");
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [screen, setScreen] = useState<Screen>("home");
+  // A question typed into Mooty on the hub, handed to the chat to send itself.
+  const [asked, setAsked] = useState("");
   const [theme, setTheme] = useState(
     () => localStorage.getItem("studylink.theme") ?? "dark"
   );
@@ -83,64 +83,86 @@ export function App() {
 
   if (!user) return <AuthPage onSignedIn={setUser} />;
 
-  const active = TABS.find((t) => t.id === tab)!;
+  function go(to: Destination) {
+    setAsked("");
+    setScreen(to);
+  }
 
   return (
     <div className="shell">
-      {menuOpen ? <div className="scrim" onClick={() => setMenuOpen(false)} /> : null}
+      {/* Icon-only, and as narrow as a touch target allows. Everything you
+          navigate to lives on the hub; what is left here is the two things
+          that are never the reason you opened the app -- settings, and the
+          account they belong to. */}
+      <nav className="rail">
+        <button
+          className="rail-home"
+          onClick={() => go("home" as Destination)}
+          title="moot — home"
+          aria-label="Home"
+        >
+          m
+        </button>
 
-      <nav className={`sidebar${menuOpen ? " open" : ""}`}>
-        <div className="brand">
-          <span className="brand-mark">m</span> moot
-        </div>
-
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            className={`nav-item${tab === id ? " active" : ""}`}
-            onClick={() => { setTab(id); setMenuOpen(false); }}
-          >
-            <Icon /> {label}
-          </button>
-        ))}
-
-        <div className="nav-spacer" />
+        <div className="rail-spacer" />
 
         <button
-          className="nav-item"
+          className={`rail-btn${screen === "settings" ? " active" : ""}`}
+          onClick={() => setScreen("settings")}
+          title="Settings and account"
+          aria-label="Settings and account"
+        >
+          <IconSettings />
+        </button>
+        <button
+          className="rail-btn"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+          aria-label={theme === "dark" ? "Light mode" : "Dark mode"}
         >
           {theme === "dark" ? <IconSun /> : <IconMoon />}
-          {theme === "dark" ? "Light mode" : "Dark mode"}
         </button>
-        <div className="small faint" style={{ padding: "6px 10px" }}>
-          {user.email}
-        </div>
       </nav>
 
       <main className="main">
         <header className="topbar">
-          <button className="btn btn-ghost btn-sm menu-btn" onClick={() => setMenuOpen(true)} aria-label="Menu">
-            <IconMenu />
-          </button>
-          <h1>{active.title}</h1>
+          {screen === "home" ? (
+            <Wordmark size={19} />
+          ) : (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setScreen("home")}>
+                ← Menu
+              </button>
+              <h1>{TITLES[screen]}</h1>
+            </>
+          )}
           <div className="spacer" />
+          <span className="small faint topbar-user">{user.email}</span>
         </header>
 
-        {/* Chat owns its own scrolling so the composer can stay pinned. */}
-        {tab === "chat" ? (
-          <ChatPage />
+        {screen === "chat" ? (
+          <ChatPage initialQuestion={asked} />
         ) : (
           <div className="content">
-            {tab === "notes" ? <NotesPage /> : null}
-            {tab === "study" ? <StudyPage /> : null}
-            {tab === "discover" ? <DiscoverPage /> : null}
-            {tab === "assignments" ? <AssignmentsPage /> : null}
-            {tab === "settings" ? (
+            {screen === "home" ? (
+              <HomePage
+                onGo={go}
+                onAsk={(question) => { setAsked(question); setScreen("chat"); }}
+              />
+            ) : null}
+            {screen === "study" ? <StudyPage /> : null}
+            {screen === "notes" ? <NotesPage /> : null}
+            {screen === "test" ? <TestMenuPage /> : null}
+            {screen === "match" ? <AssignmentsPage /> : null}
+            {screen === "discover" ? <DiscoverPage /> : null}
+            {screen === "community" ? (
+              <CommunityPage onDiscover={() => setScreen("discover")} />
+            ) : null}
+            {screen === "settings" ? (
               <SettingsPage
                 theme={theme}
                 onThemeChange={setTheme}
-                onSignedOut={() => setUser(null)}
+                onSignedOut={() => { setUser(null); setScreen("home"); }}
               />
             ) : null}
           </div>

@@ -365,7 +365,7 @@ function StudySession({
 
 /* ------------------------------------------------------------------- test */
 
-function PracticeTest({
+export function PracticeTest({
   deckId, title, onDone,
 }: { deckId: number; title: string; onDone: () => void }) {
   const [kind, setKind] = useState<"multiple_choice" | "written">("multiple_choice");
