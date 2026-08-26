@@ -40,6 +40,7 @@ from .db import transaction
 from .models import Assignment, Chunk, Course, Note
 from .schema import (
     assignments,
+    folders,
     card_reviews,
     cards,
     chunks,
@@ -347,8 +348,16 @@ def get_assignment(
 
 
 def _note_select():
-    return select(notes, func.coalesce(courses.c.name, "").label("course_name")).join(
-        courses, courses.c.id == notes.c.course_id, isouter=True
+    # Both joins outer. A note belongs to a course and a folder optionally, and
+    # an inner join on either would make "unfiled" mean "invisible".
+    return select(
+        notes,
+        func.coalesce(courses.c.name, "").label("course_name"),
+        func.coalesce(folders.c.name, "").label("folder_name"),
+    ).select_from(
+        notes
+        .outerjoin(courses, courses.c.id == notes.c.course_id)
+        .outerjoin(folders, folders.c.id == notes.c.folder_id)
     )
 
 
@@ -358,9 +367,11 @@ def _note_from_row(row) -> Note:
         title=row["title"],
         body=row["body"],
         course_id=row["course_id"],
+        folder_id=row["folder_id"] if "folder_id" in row else None,
         source_type=row["source_type"],
         created_at=_iso(row["created_at"]) or "",
         course_name=row["course_name"] if "course_name" in row else "",
+        folder_name=row["folder_name"] if "folder_name" in row else "",
     )
 
 
@@ -371,6 +382,7 @@ def create_note(
     course_id: Optional[int] = None,
     source_type: str = "note",
     user_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
 ) -> int:
     if source_type not in ("note", "transcript"):
         raise ValueError("source_type must be 'note' or 'transcript'")
@@ -380,6 +392,7 @@ def create_note(
             insert(notes).values(
                 user_id=user_id,
                 course_id=course_id,
+                folder_id=folder_id,
                 title=title.strip() or "Untitled note",
                 body=body,
                 source_type=source_type,
@@ -1621,3 +1634,95 @@ def assignment_source(conn: Connection, target_id: int, user_id: int) -> Optiona
         )
     ).first()
     return str(row[0]) if row else None
+
+
+# ------------------------------------------------------------------ folders
+
+
+def create_folder(conn: Connection, user_id: int, name: str) -> int:
+    now = _now()
+    with transaction(conn):
+        result = conn.execute(
+            insert(folders).values(
+                user_id=user_id, name=(name or "").strip() or "Untitled folder",
+                created_at=now,
+            )
+        )
+    return int(result.inserted_primary_key[0])
+
+
+def list_folders(conn: Connection, user_id: int) -> list[dict]:
+    """Folders with the number of notes in each, in one query.
+
+    The count is the only thing that makes a folder list useful at a glance,
+    so computing it per folder in Python would mean a query per row on a screen
+    whose whole job is the overview.
+    """
+    rows = conn.execute(
+        select(
+            folders.c.id,
+            folders.c.name,
+            folders.c.created_at,
+            func.count(notes.c.id).label("notes"),
+        )
+        .select_from(folders.outerjoin(notes, notes.c.folder_id == folders.c.id))
+        .where(folders.c.user_id == user_id)
+        .group_by(folders.c.id, folders.c.name, folders.c.created_at)
+        .order_by(folders.c.name)
+    ).mappings()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "notes": int(row["notes"] or 0),
+            "created_at": _iso(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def get_folder(conn: Connection, folder_id: int, user_id: int) -> Optional[dict]:
+    row = conn.execute(
+        select(folders).where(folders.c.id == folder_id, folders.c.user_id == user_id)
+    ).mappings().first()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["name"], "created_at": _iso(row["created_at"])}
+
+
+def rename_folder(
+    conn: Connection, folder_id: int, user_id: int, name: str
+) -> Optional[dict]:
+    with transaction(conn):
+        conn.execute(
+            update(folders)
+            .where(folders.c.id == folder_id, folders.c.user_id == user_id)
+            .values(name=(name or "").strip() or "Untitled folder")
+        )
+    return get_folder(conn, folder_id, user_id)
+
+
+def delete_folder(conn: Connection, folder_id: int, user_id: int) -> None:
+    """Remove the folder. The notes in it survive, unfiled.
+
+    The foreign key says SET NULL, but saying it again here is the point: a
+    student clicking "delete folder" is making a filing decision, and there is
+    no reading of that click on which they meant to destroy the notes.
+    """
+    with transaction(conn):
+        conn.execute(
+            delete(folders).where(
+                folders.c.id == folder_id, folders.c.user_id == user_id
+            )
+        )
+
+
+def set_note_folder(
+    conn: Connection, note_id: int, user_id: int, folder_id: Optional[int]
+) -> None:
+    with transaction(conn):
+        conn.execute(
+            update(notes)
+            .where(notes.c.id == note_id, notes.c.user_id == user_id)
+            .values(folder_id=folder_id)
+        )

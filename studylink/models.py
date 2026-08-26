@@ -52,9 +52,12 @@ class Note:
     title: str
     body: str
     course_id: Optional[int] = None
+    #: Null is a normal state -- an unfiled note, not a mistake.
+    folder_id: Optional[int] = None
     source_type: str = "note"
     created_at: str = ""
     course_name: str = ""
+    folder_name: str = ""
 
 
 @dataclass

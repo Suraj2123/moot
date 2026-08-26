@@ -154,8 +154,14 @@ class StudyLink:
         course_id: Optional[int] = None,
         source_type: str = "note",
         reindex: bool = True,
+        folder_id: Optional[int] = None,
     ) -> int:
-        note_id = store.create_note(self.conn, title, body, course_id, source_type, self.user_id)
+        if folder_id is not None:
+            assert_owned(self.conn, "folders", folder_id, self.user_id)
+        note_id = store.create_note(
+            self.conn, title, body, course_id, source_type, self.user_id,
+            folder_id=folder_id,
+        )
         self.sync_note_cards(note_id, title, body)
         if reindex:
             self.reindex()
@@ -265,6 +271,30 @@ class StudyLink:
         if 0 < pending <= self.INLINE_INDEX_LIMIT:
             self.reindex()
         return pending
+
+    # ----------------------------------------------------------------- folders
+
+    def list_folders(self) -> list[dict]:
+        return store.list_folders(self.conn, self.user_id)
+
+    def create_folder(self, name: str) -> dict:
+        folder_id = store.create_folder(self.conn, self.user_id, name)
+        return {**store.get_folder(self.conn, folder_id, self.user_id), "notes": 0}
+
+    def rename_folder(self, folder_id: int, name: str) -> dict:
+        assert_owned(self.conn, "folders", folder_id, self.user_id)
+        return store.rename_folder(self.conn, folder_id, self.user_id, name)
+
+    def delete_folder(self, folder_id: int) -> None:
+        """Remove a folder; its notes survive, unfiled."""
+        assert_owned(self.conn, "folders", folder_id, self.user_id)
+        store.delete_folder(self.conn, folder_id, self.user_id)
+
+    def move_note(self, note_id: int, folder_id: Optional[int]) -> None:
+        assert_owned(self.conn, "notes", note_id, self.user_id)
+        if folder_id is not None:
+            assert_owned(self.conn, "folders", folder_id, self.user_id)
+        store.set_note_folder(self.conn, note_id, self.user_id, folder_id)
 
     # ------------------------------------------------------------ study targets
 

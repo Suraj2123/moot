@@ -267,12 +267,35 @@ assignments = Table(
 )
 
 
+# Somewhere to put notes. Flat lists work until about thirty notes and then
+# stop; a semester produces more than that. One level only -- nested folders
+# need a tree UI, a move-into-descendant guard, and a breadcrumb, and none of
+# that earns its place before someone has actually outgrown a single level.
+folders = Table(
+    "folders",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "user_id",
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("name", String(120), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+
 notes = Table(
     "notes",
     metadata,
     Column("id", Integer, primary_key=True),
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True),
     Column("course_id", Integer, ForeignKey("courses.id", ondelete="SET NULL")),
+    # SET NULL, not CASCADE. Deleting a folder is a filing decision; it must
+    # never be a way to lose a semester of notes by accident.
+    Column("folder_id", Integer, ForeignKey("folders.id", ondelete="SET NULL"), index=True),
     Column("title", Text, nullable=False),
     Column("body", Text, nullable=False),
     Column("source_type", String(32), nullable=False, default="note"),
@@ -495,6 +518,7 @@ USER_OWNED_TABLES = {
     "courses": courses,
     "assignments": assignments,
     "notes": notes,
+    "folders": folders,
     "chunks": chunks,
     "eval_labels": eval_labels,
     "work_sessions": work_sessions,

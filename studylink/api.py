@@ -183,7 +183,18 @@ class NoteIn(BaseModel):
     title: str
     body: str
     course_id: Optional[int] = None
+    folder_id: Optional[int] = None
     source_type: str = Field(default="note", pattern="^(note|transcript)$")
+
+
+class FolderIn(BaseModel):
+    name: str = ""
+
+
+class NoteMoveIn(BaseModel):
+    """Null means "take it out of every folder", which is a real destination."""
+
+    folder_id: Optional[int] = None
 
 
 class NotePatchIn(BaseModel):
@@ -734,6 +745,8 @@ def assignment_matches(
 @api.get("/notes")
 def list_notes(
     course_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+    unfiled: bool = False,
     search: str = "",
     app: StudyLink = Depends(current_app),
 ) -> list[dict]:
@@ -763,8 +776,15 @@ def list_notes(
             "source_type": n.source_type,
             "chars": len(n.body),
             "index_status": index_state(n.id),
+            "folder_id": n.folder_id,
+            "folder": n.folder_name,
         }
         for n in app.list_notes(course_id=course_id, search=search)
+        # Filtering here rather than in SQL: the list is already loaded for the
+        # index-status pass above, and a second query would buy nothing at the
+        # sizes a folder holds.
+        if (folder_id is None or n.folder_id == folder_id)
+        and (not unfiled or n.folder_id is None)
     ]
 
 
@@ -779,10 +799,43 @@ def create_note(payload: NoteIn, app: StudyLink = Depends(current_app)) -> dict:
     """
     note_id = app.add_note(
         payload.title, payload.body, payload.course_id, payload.source_type,
-        reindex=False,
+        reindex=False, folder_id=payload.folder_id,
     )
     job = jobs_module.enqueue(app.conn, app.user_id, jobs_module.KIND_REINDEX)
     return {"id": note_id, "job": job.as_dict()}
+
+
+@api.get("/folders")
+def list_folders(app: StudyLink = Depends(current_app)) -> list[dict]:
+    """Folders with the note count in each."""
+    return app.list_folders()
+
+
+@api.post("/folders", status_code=201)
+def create_folder(payload: FolderIn, app: StudyLink = Depends(current_app)) -> dict:
+    return app.create_folder(payload.name)
+
+
+@api.patch("/folders/{folder_id}")
+def rename_folder(
+    folder_id: int, payload: FolderIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    return app.rename_folder(folder_id, payload.name)
+
+
+@api.delete("/folders/{folder_id}", status_code=204)
+def delete_folder(folder_id: int, app: StudyLink = Depends(current_app)) -> Response:
+    """Remove the folder. Its notes survive, unfiled -- see store.delete_folder."""
+    app.delete_folder(folder_id)
+    return Response(status_code=204)
+
+
+@api.post("/notes/{note_id}/folder")
+def move_note(
+    note_id: int, payload: NoteMoveIn, app: StudyLink = Depends(current_app)
+) -> dict:
+    app.move_note(note_id, payload.folder_id)
+    return {"note_id": note_id, "folder_id": payload.folder_id}
 
 
 @api.get("/notes/{note_id}")
@@ -939,6 +992,13 @@ def search(
 def _chat_for(app: StudyLink):
     from .chat import NoteChat
 
+    # Index a small backlog first, for the same reason creating a target does.
+    # The chat refuses when retrieval finds nothing, which is correct -- but a
+    # student whose first question is refused because the worker has not run
+    # yet learns that the feature does not work, not that their notes are
+    # still being read. Bounded by INLINE_INDEX_LIMIT; a large backlog stays
+    # with the worker.
+    app.catch_up_index()
     return NoteChat(app.conn, app.retriever, user_id=app.user_id)
 
 
