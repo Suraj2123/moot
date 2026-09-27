@@ -54,6 +54,9 @@ class Note:
     course_id: Optional[int] = None
     #: Null is a normal state -- an unfiled note, not a mistake.
     folder_id: Optional[int] = None
+    visibility: str = "private"
+    shared_cohort_id: Optional[int] = None
+    contributor_name: Optional[str] = None
     source_type: str = "note"
     created_at: str = ""
     course_name: str = ""
@@ -97,6 +100,8 @@ class NoteMatch:
     def as_dict(self) -> dict:
         return {
             "note_id": self.note.id,
+            "contributor_name": self.note.contributor_name,
+            "cohort_id": self.note.shared_cohort_id,
             "title": self.note.title,
             "course": self.note.course_name,
             "source_type": self.note.source_type,

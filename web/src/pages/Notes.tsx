@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  notes, folders, jobs, ApiError, uploadNote, UPLOAD_ACCEPT, UPLOAD_MAX_BYTES,
+  cohorts, type Cohort, notes, folders, jobs, ApiError, uploadNote, UPLOAD_ACCEPT, UPLOAD_MAX_BYTES,
   type Folder, type Job, type Note, type Match,
 } from "../api";
 import { Alert, Empty, Skeleton, ConfidenceBadge, ScoreBar } from "../components/ui";
+import { ShareNoteControl } from "../components/CohortControls";
 import { OutlineEditor } from "../components/OutlineEditor";
 import { IconPlus, IconSearch, IconUpload } from "../components/Icons";
 
 export function NotesPage() {
+  const [cohortList, setCohortList] = useState<Cohort[]>([]);
+  useEffect(() => { cohorts.list().then(setCohortList).catch(() => setError("Could not load cohorts. Refresh to manage sharing.")); }, []);
   const [items, setItems] = useState<Note[] | null>(null);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
@@ -129,6 +132,7 @@ export function NotesPage() {
         <div className="stack">
           {items.map((note) => (
             <div key={note.id}>
+              <ShareNoteControl note={note} items={cohortList} onChanged={() => load()} />
               {editing === note.id ? (
                 <NoteEditor
                   note={note}

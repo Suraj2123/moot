@@ -319,3 +319,13 @@ Working MVP.
 ## License
 
 MIT
+
+
+### Class cohorts
+
+Create a term-specific cohort, invite classmates, and explicitly share individual
+notes. Ask Mooty using your own library plus one selected cohort, with contributor
+names on source citations. Joining never automatically shares notes. Administrators
+can rotate invites, remove members or shared notes, and transfer administration.
+See [the cohort guide](docs/COHORTS.md) for usage, API details, migration `0016`,
+revocation behavior, and verification commands.

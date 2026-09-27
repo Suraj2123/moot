@@ -136,6 +136,8 @@ def format_note_context(matches: list[NoteMatch], max_chars: int = 2400) -> str:
             body = body[:max_chars].rsplit(" ", 1)[0] + " [...truncated]"
 
         header = f"[N{note.id}] {note.title}"
+        if note.contributor_name:
+            header += f" — contributed by {note.contributor_name}"
         meta = f"course: {note.course_name or 'unassigned'} | type: {note.source_type} | match confidence: {match.confidence:.2f}"
         block = f"{header}\n{meta}\n"
         if matched and matched not in body:
@@ -175,6 +177,7 @@ class WorkSessionAgent:
         self.model = model
         self.max_tokens = max_tokens
         self._client = client
+        self.supplied_matches: dict[int, NoteMatch] = {}
         # Server-side refusal fallback: on a policy decline the API re-runs the
         # request on Anthropic's recommended fallback model inside the same call,
         # so a benign request near a classifier boundary still gets answered.
@@ -210,11 +213,13 @@ class WorkSessionAgent:
 
         lines = []
         for match in matches:
+            self.supplied_matches[match.note.id] = match
             snippet = (match.matched_chunk.text if match.matched_chunk else match.evidence.snippet)
             snippet = snippet.strip()[:900]
             lines.append(
                 f"[N{match.note.id}] {match.note.title} "
-                f"(course: {match.note.course_name or 'unassigned'}, confidence {match.confidence:.2f})\n{snippet}"
+                f"(course: {match.note.course_name or 'unassigned'}, confidence {match.confidence:.2f}, "
+                f"contributed by {match.note.contributor_name or 'you'})\n{snippet}"
             )
         return "\n\n".join(lines)
 
@@ -329,6 +334,7 @@ class WorkSessionAgent:
         Returns the output plus the message history, so the caller can keep
         chatting in the same context.
         """
+        self.supplied_matches = {m.note.id: m for m in matches}
         messages = [{"role": "user", "content": self.build_initial_prompt(assignment, matches, mode)}]
         result = self._run_loop(messages, SYSTEM_PROMPT, on_tool_call=on_tool_call)
         messages.append({"role": "assistant", "content": result.text})
@@ -395,10 +401,20 @@ def load_messages(conn: Connection, session_id: int, user_id: int) -> list[dict]
 
 
 def resolve_citations(
-    conn: Connection, note_ids: list[int], user_id: int
+    conn: Connection, note_ids: list[int], user_id: int,
+    cohort_id: int | None = None, offered_note_ids: list[int] | None = None,
 ) -> list[dict]:
-    """Turn cited ids into displayable references, flagging any that do not exist."""
-    notes = store.get_notes(conn, note_ids, user_id)
+    """Resolve authorized citations; pooled citations must also have been supplied."""
+    if cohort_id is not None:
+        from . import cohorts
+        if offered_note_ids is None:
+            raise ValueError("Pooled citation resolution requires the supplied note IDs.")
+        notes = {n.id: n for n in cohorts.readable_notes(conn, user_id, cohort_id, note_ids)}
+    else:
+        notes = store.get_notes(conn, note_ids, user_id)
+    if offered_note_ids is not None:
+        offered = set(offered_note_ids)
+        notes = {nid: n for nid, n in notes.items() if nid in offered}
     out = []
     for note_id in note_ids:
         note = notes.get(note_id)
@@ -408,6 +424,8 @@ def resolve_citations(
                 "title": note.title if note else f"(unknown note {note_id})",
                 "course": note.course_name if note else "",
                 "valid": note is not None,
+                "contributor_name": note.contributor_name if note else None,
+                "cohort_id": note.shared_cohort_id if note else None,
             }
         )
     return out

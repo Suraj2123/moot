@@ -20,6 +20,7 @@ from sqlalchemy import Connection, delete, func, select
 from sqlalchemy.exc import DBAPIError
 
 from .db import transaction
+from . import cohorts
 from .pgvector_support import has_vector_column, to_vector_param
 from .schema import assignments, chunks, decks, embeddings
 
@@ -115,18 +116,27 @@ class VectorStore:
         with transaction(self.conn):
             self.conn.execute(statement)
 
+    def _scope(self, owner_type: str, user_id: int, cohort_id: int | None):
+        if cohort_id is not None:
+            cohorts.require_member(self.conn, cohort_id, user_id)
+            if owner_type != "chunk":
+                raise ValueError("Cohort retrieval is supported only for note chunks.")
+        return (cohorts.chunk_scope(user_id, cohort_id) if owner_type == "chunk"
+                else _owner_table(owner_type).c.user_id == user_id)
+
     def matrix(
-        self, owner_type: str, model: str, user_id: int
+        self, owner_type: str, model: str, user_id: int, cohort_id: int | None = None
     ) -> tuple[list[int], np.ndarray]:
         """Load one user's vectors of a kind into memory as an (n, dim) matrix."""
         owner = _owner_table(owner_type)
+        scope = self._scope(owner_type, user_id, cohort_id)
         rows = self.conn.execute(
             select(embeddings.c.owner_id, embeddings.c.vector)
             .join(owner, owner.c.id == embeddings.c.owner_id)
             .where(
                 embeddings.c.owner_type == owner_type,
                 embeddings.c.model == model,
-                owner.c.user_id == user_id,
+                scope,
             )
             .order_by(embeddings.c.owner_id)
         ).all()
@@ -160,6 +170,7 @@ class VectorStore:
         user_id: int,
         top_k: int = 10,
         exclude_ids: Iterable[int] = (),
+        cohort_id: int | None = None,
     ) -> list[tuple[int, float]]:
         """Exact cosine search over one user's vectors.
 
@@ -171,10 +182,10 @@ class VectorStore:
         """
         if has_vector_column(self.conn):
             return self._search_native(
-                query, owner_type, model, user_id, top_k, exclude_ids
+                query, owner_type, model, user_id, top_k, exclude_ids, cohort_id
             )
         return self._search_numpy(
-            query, owner_type, model, user_id, top_k, exclude_ids
+            query, owner_type, model, user_id, top_k, exclude_ids, cohort_id
         )
 
     def _search_native(
@@ -185,6 +196,7 @@ class VectorStore:
         user_id: int,
         top_k: int,
         exclude_ids: Iterable[int],
+        cohort_id: int | None = None,
     ) -> list[tuple[int, float]]:
         """Rank inside Postgres with pgvector's cosine-distance operator.
 
@@ -208,7 +220,7 @@ class VectorStore:
             .where(
                 embeddings.c.owner_type == owner_type,
                 embeddings.c.model == model,
-                owner.c.user_id == user_id,
+                self._scope(owner_type, user_id, cohort_id),
             )
             # Exactly one ORDER BY term, and it must be the distance expression.
             # Adding a tie-breaker column here forces the planner into a sort over
@@ -254,9 +266,10 @@ class VectorStore:
         user_id: int,
         top_k: int,
         exclude_ids: Iterable[int],
+        cohort_id: int | None = None,
     ) -> list[tuple[int, float]]:
         """Exact cosine search in Python. The only path on SQLite."""
-        ids, matrix = self.matrix(owner_type, model, user_id)
+        ids, matrix = self.matrix(owner_type, model, user_id, cohort_id)
         if not ids:
             return []
         if matrix.shape[1] != query.shape[0]:

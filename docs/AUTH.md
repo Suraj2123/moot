@@ -122,3 +122,12 @@ and there is no wildcard option because a wildcard lets any page on the internet
 call this API with a user's token. `TRUST_PROXY_HEADERS` should be set only
 behind a proxy that overwrites `X-Forwarded-For`; otherwise it is a rate-limit
 bypass, since the client picks its own value and gets a fresh budget per request.
+
+
+## Cohort access
+
+Authentication does not itself grant cohort access. Cohort endpoints require active
+membership; only the administrator can moderate, rotate invites, or transfer
+administration. Note sharing additionally requires ownership and a nonempty
+chosen display name. Unknown and inaccessible cohorts/sources return 404.
+Attribution never uses email as a fallback. See [COHORTS.md](COHORTS.md).

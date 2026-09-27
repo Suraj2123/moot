@@ -144,6 +144,8 @@ export interface Folder {
 }
 export interface Note {
   id: number; title: string; course: string | null;
+  visibility?: "private" | "cohort";
+  shared_cohort_id?: number | null;
   source_type: string; chars: number;
   folder_id?: number | null;
   folder?: string;
@@ -179,7 +181,7 @@ export interface Usage {
   calls: number; input_tokens: number; output_tokens: number;
   cost_usd: number; budget_usd: number | null; remaining_usd: number | null;
 }
-export interface Source { note_id: number; title: string; score?: number }
+export interface Source { note_id: number; title: string; score?: number; contributor_name?: string | null; cohort_id?: number | null }
 export interface AnswerPayload {
   text: string; refused: boolean; grounded: boolean;
   cited_note_ids: number[]; invented_note_ids: number[];
@@ -282,12 +284,13 @@ export const reindex = () => api.post<Job>("/reindex");
 export async function* askStream(
   question: string,
   history: { role: string; content: string }[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  cohort_id?: number | null
 ): AsyncGenerator<any> {
   const response = await fetch("/ask/stream", {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ question, history }),
+    body: JSON.stringify({ question, history, cohort_id: cohort_id ?? null }),
     signal,
   });
 
@@ -508,4 +511,27 @@ export const billing = {
   saveKey: (api_key: string) => api.post<ModelKeyStatus>("/model-key", { api_key }),
   removeKey: () => api.del<void>("/model-key"),
   pricing: () => api.get<Pricing>("/pricing"),
+};
+
+
+export interface Cohort { id: number; name: string; term: string; role: "member" | "instructor"; invite_code?: string }
+export interface CohortMember { user_id: number; display_name: string | null; role: "member" | "instructor" }
+export interface SharedNote { id: number; title: string; contributor_name: string | null; cohort_id: number; index_status: "ready" | "pending"; body?: string }
+export const cohorts = {
+  list: () => api.get<Cohort[]>("/cohorts"),
+  create: (name: string, term: string) => api.post<Cohort>("/cohorts", { name, term }),
+  get: (id: number) => api.get<Cohort>(`/cohorts/${id}`),
+  preview: (code: string) => api.post<Pick<Cohort, "id" | "name" | "term">>("/cohort-invites/preview", { code }),
+  join: (code: string) => api.post<Cohort>("/cohort-invites/join", { code }),
+  rotate: (id: number) => api.post<Cohort>(`/cohorts/${id}/invite`),
+  members: (id: number) => api.get<CohortMember[]>(`/cohorts/${id}/members`),
+  removeMember: (id: number, member: number) => api.del<void>(`/cohorts/${id}/members/${member}`),
+  leave: (id: number) => api.del<void>(`/cohorts/${id}/membership`),
+  transfer: (id: number, user_id: number) => api.post<void>(`/cohorts/${id}/transfer`, { user_id }),
+  notes: (id: number) => api.get<SharedNote[]>(`/cohorts/${id}/notes`),
+  note: (id: number, note: number) => api.get<SharedNote>(`/cohorts/${id}/notes/${note}`),
+  moderate: (id: number, note: number) => api.del<void>(`/cohorts/${id}/notes/${note}`),
+  share: (note: number, cohort_id: number | null) => api.patch(`/notes/${note}/sharing`, { cohort_id }),
+  profile: (display_name: string) => api.patch("/auth/profile", { display_name }),
+  search: (q: string, cohort: number) => api.get<(Source & { confidence: number })[]>(`/search?${new URLSearchParams({ q, cohort_id: String(cohort) })}`),
 };

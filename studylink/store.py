@@ -368,6 +368,8 @@ def _note_from_row(row) -> Note:
         body=row["body"],
         course_id=row["course_id"],
         folder_id=row["folder_id"] if "folder_id" in row else None,
+        visibility=row["visibility"],
+        shared_cohort_id=row["shared_cohort_id"],
         source_type=row["source_type"],
         created_at=_iso(row["created_at"]) or "",
         course_name=row["course_name"] if "course_name" in row else "",

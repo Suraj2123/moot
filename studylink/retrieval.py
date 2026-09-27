@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 
-from . import store
+from . import store, cohorts
 from .config import RetrievalConfig
 from .embeddings import EmbeddingProvider, tokenize
 from .models import Assignment, AssignmentMatch, Evidence, Note, NoteMatch
@@ -104,11 +104,13 @@ class Retriever:
         provider: EmbeddingProvider,
         config: RetrievalConfig,
         user_id: int,
+        cohort_id: int | None = None,
     ) -> None:
         self.conn = conn
         self.provider = provider
         self.config = config
         self.user_id = user_id
+        self.cohort_id = cohort_id
         self.vectors = VectorStore(conn)
 
     # ------------------------------------------------------------------ helpers
@@ -118,12 +120,17 @@ class Retriever:
     ) -> list[tuple[int, int, float]]:
         """Return (note_id, chunk_id, score), best chunk first, one row per note."""
         hits = self.vectors.search(
-            query_vector, "chunk", self.provider.name, self.user_id, top_k=candidate_pool
+            query_vector, "chunk", self.provider.name, self.user_id, top_k=candidate_pool,
+            **({"cohort_id": self.cohort_id} if self.cohort_id is not None else {})
         )
         if not hits:
             return []
 
-        chunk_to_note = store.chunk_note_map(self.conn, self.user_id)
+        chunk_to_note = (
+            {cid: chunk.note_id for cid, chunk in cohorts.readable_chunks(
+                self.conn, self.user_id, self.cohort_id, [hit[0] for hit in hits]).items()}
+            if self.cohort_id is not None else store.chunk_note_map(self.conn, self.user_id)
+        )
         best: dict[int, tuple[int, float]] = {}
         for chunk_id, score in hits:
             note_id = chunk_to_note.get(chunk_id)
@@ -145,10 +152,14 @@ class Retriever:
         apply_threshold: bool,
     ) -> list[NoteMatch]:
         note_ids = [note_id for note_id, _, _ in ranked[: top_k * 2]]
-        notes = store.get_notes(self.conn, note_ids, self.user_id)
-        chunks = store.get_chunks(
-            self.conn, [chunk_id for _, chunk_id, _ in ranked[: top_k * 2]], self.user_id
-        )
+        chunk_ids = [chunk_id for _, chunk_id, _ in ranked[: top_k * 2]]
+        if self.cohort_id is None:
+            notes = store.get_notes(self.conn, note_ids, self.user_id)
+            chunks = store.get_chunks(self.conn, chunk_ids, self.user_id)
+        else:
+            notes = {n.id: n for n in cohorts.readable_notes(
+                self.conn, self.user_id, self.cohort_id, note_ids)}
+            chunks = cohorts.readable_chunks(self.conn, self.user_id, self.cohort_id, chunk_ids)
 
         matches: list[NoteMatch] = []
         for note_id, chunk_id, score in ranked:

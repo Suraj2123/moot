@@ -24,7 +24,7 @@ export default defineConfig({
         // until it was: an unproxied path is served by Vite, which answers
         // with index.html and a JSON parse error rather than a 404.
         "/decks", "/cards", "/outline", "/progress", "/discover", "/d",
-        "/model-key", "/pricing",
+        "/model-key", "/pricing", "/cohorts", "/cohort-invites",
       ].map((path) => [path, { target: "http://127.0.0.1:8000", changeOrigin: true }])
     ),
   },

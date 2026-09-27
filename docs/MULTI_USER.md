@@ -10,8 +10,11 @@ here are what keep that bug from shipping.
 ## The rule
 
 **Every row that holds user content carries a `user_id`, and every query that
-reads it filters on `user_id`.** No exceptions, no "this endpoint is internal
-so it's fine".
+reads it filters on `user_id`.** Cohort retrieval is an explicit, additive read
+permission documented in [COHORTS.md](COHORTS.md): the caller's own notes plus
+notes explicitly shared into one selected cohort whose reader and contributor
+are active members. Owner-only reads and all content edits remain user-scoped.
+There is no implicit cross-user access for internal endpoints.
 
 | Table | Owner column | Notes |
 |---|---|---|
@@ -103,12 +106,22 @@ python -m pytest tests/test_isolation.py -q     # expect failures
 A green isolation suite after a change to any query is the only evidence that
 change is safe.
 
-## What day 1 deliberately left out
+## Historical day-1 limits and current status
 
-- **Authentication.** `UserContext.local()` is the only constructor in use; every
-  request is the same local user. Day 3 adds Sign in with Apple and makes the
-  context come from a verified token.
+- **Authentication is now implemented.** API requests resolve verified bearer
+  sessions to an individual user. `UserContext.local()` remains a CLI/demo
+  convenience; it is not an API fallback. See [AUTH.md](AUTH.md).
 - **`NOT NULL` on `user_id`.** The columns are nullable so the backfill migration
   can run against an existing database. Once no unowned rows remain, tighten it.
 - **Row-level security.** Postgres can enforce this in the database rather than
   in application code. Worth doing on day 2, when the storage engine changes.
+
+
+## Shared entities
+
+`cohorts` holds class identity, not privately owned content. Its access is mediated
+by `cohort_memberships` (unique per cohort/user, with active/left/removed status).
+New pooled readers must use `cohorts.note_scope` / `cohorts.chunk_scope` and require
+membership. Do not weaken `errors.assert_owned` or general private store reads to
+make pooled access work. Private folder/course metadata is removed from foreign
+shared-note responses. See [COHORTS.md](COHORTS.md) for revocation and migrations.

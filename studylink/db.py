@@ -26,6 +26,8 @@ _RESET_ORDER = (
     "embeddings",
     "chunks",
     "notes",
+    "cohort_memberships",
+    "cohorts",
     "assignments",
     "courses",
     "sync_log",

@@ -83,14 +83,15 @@ def evaluate_config(
     labels_path: Path,
     user_id: int,
     reindex: bool = True,
+    cohort_id: int | None = None,
 ) -> EvalReport:
     """Index under `config`, retrieve for every labelled assignment, score the rankings."""
     if reindex:
         Indexer(conn, provider, config, user_id).reindex()
 
     pairs = load_labels(labels_path)
-    positives, negatives, unresolved = resolve_labels(conn, pairs, user_id)
-    retriever = Retriever(conn, provider, config, user_id)
+    positives, negatives, unresolved = resolve_labels(conn, pairs, user_id, cohort_id)
+    retriever = Retriever(conn, provider, config, user_id, cohort_id=cohort_id)
 
     # Rank deeper than k so MRR and MAP can see relevant notes that fall just
     # outside the displayed window; @k metrics still use the top k.

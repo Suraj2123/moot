@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { askStream, ApiError, type AnswerPayload, type Source } from "../api";
+import { CohortScope, SourceDialog } from "../components/CohortControls";
 import { Alert } from "../components/ui";
 import { IconSend } from "../components/Icons";
 
@@ -24,7 +25,7 @@ const SUGGESTIONS = [
  * that looks real and is not is the failure mode this whole feature is built to
  * avoid, so it is shown as wrong rather than quietly dropped.
  */
-function Prose({ text, answer }: { text: string; answer?: AnswerPayload }) {
+function Prose({ text, answer, sources, onSource }: { text: string; answer?: AnswerPayload; sources?: Source[]; onSource: (source: Source) => void }) {
   const invented = new Set(answer?.invented_note_ids ?? []);
   const parts = text.split(/(\[N\d+\])/g);
 
@@ -35,14 +36,18 @@ function Prose({ text, answer }: { text: string; answer?: AnswerPayload }) {
         if (!match) return <span key={i}>{part}</span>;
         const id = Number(match[1]);
         const bad = invented.has(id);
+        const source = sources?.find(s => s.note_id === id);
         return (
-          <span
+          <button
+            type="button"
+            disabled={bad || !source}
+            onClick={() => source && onSource(source)}
             key={i}
             className={`citation${bad ? " invented" : ""}`}
             title={bad ? "This note was never supplied — the answer invented it" : `Note ${id}`}
           >
-            N{id}{bad ? " ?" : ""}
-          </span>
+            N{id}{bad ? " ?" : ""}{source?.contributor_name ? ` · ${source.contributor_name}` : ""}
+          </button>
         );
       })}
     </div>
@@ -54,7 +59,14 @@ function Prose({ text, answer }: { text: string; answer?: AnswerPayload }) {
  * once, on mount, rather than dropped into the composer for them to press
  * enter on again -- they already pressed enter.
  */
-export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } = {}) {
+export function ChatPage({ initialQuestion = "", initialCohort = null }: { initialQuestion?: string; initialCohort?: number | null } = {}) {
+  const [scope, setScope] = useState<number | null>(initialCohort);
+  const [first, setFirst] = useState(initialQuestion);
+  return <ChatConversation key={scope ?? "private"} initialQuestion={first} scope={scope} onScope={id => { setFirst(""); setScope(id); }} />;
+}
+
+function ChatConversation({ initialQuestion, scope, onScope }: { initialQuestion: string; scope: number | null; onScope: (id: number | null) => void }) {
+  const [source, setSource] = useState<Source | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -95,7 +107,7 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
     abortRef.current = controller;
 
     try {
-      for await (const event of askStream(trimmed, history, controller.signal)) {
+      for await (const event of askStream(trimmed, history, controller.signal, scope)) {
         setTurns((prev) => {
           const next = [...prev];
           const last = { ...next[next.length - 1] };
@@ -103,6 +115,7 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
           else if (event.type === "text") last.content += event.text;
           else if (event.type === "done") {
             last.answer = event.answer;
+            last.sources = event.answer?.sources ?? last.sources;
             last.streaming = false;
             // The server is the authority on the final text; a dropped frame
             // would otherwise leave a subtly truncated answer on screen.
@@ -134,6 +147,8 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
 
   return (
     <div className="chat-wrap">
+      <CohortScope value={scope} onChange={onScope} disabled={busy} />
+      {source && <SourceDialog source={source} onClose={() => setSource(null)} />}
       <div className="chat-scroll" ref={scrollRef}>
         <div className="chat-inner">
           {turns.length === 0 ? (
@@ -142,8 +157,7 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
                 Ask Mooty
               </h1>
               <p className="muted" style={{ marginTop: 0, maxWidth: 460 }}>
-                Mooty answers only from what you have written, with the note each claim
-                came from. If your notes do not cover it, it says so rather than guessing.
+                Mooty answers from your notes{scope ? " and this cohort’s shared notes" : ""}, with a source for each claim. If your notes do not cover it, it says so rather than guessing.
               </p>
               <div className="stack" style={{ marginTop: 22, maxWidth: 460 }}>
                 {SUGGESTIONS.map((s) => (
@@ -166,7 +180,7 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
                 ) : (
                   <>
                     {turn.content ? (
-                      <Prose text={turn.content} answer={turn.answer} />
+                      <Prose text={turn.content} answer={turn.answer} sources={turn.sources} onSource={setSource} />
                     ) : (
                       <span className="dots" aria-label="Thinking">
                         <span /><span /><span />
@@ -186,9 +200,9 @@ export function ChatPage({ initialQuestion = "" }: { initialQuestion?: string } 
                     {turn.sources?.length ? (
                       <div className="sources">
                         {turn.sources.map((s) => (
-                          <span className="source-chip" key={s.note_id} title={`Note ${s.note_id}`}>
-                            <span className="mono">N{s.note_id}</span> {s.title}
-                          </span>
+                          <button className="source-chip" key={s.note_id} title={`Read note ${s.note_id}`} onClick={() => setSource(s)}>
+                            <span className="mono">N{s.note_id}</span> {s.title}{s.contributor_name ? ` · ${s.contributor_name}` : ""}
+                          </button>
                         ))}
                       </div>
                     ) : null}

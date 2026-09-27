@@ -27,7 +27,7 @@ from studylink.service import StudyLink  # noqa: E402
 def run_judge(app: StudyLink) -> int:
     """Grade the labelled pairs with the LLM judge and compare with the hand labels."""
     pairs = load_labels(app.settings.labels_path)
-    positives, negatives, unresolved = resolve_labels(app.conn, pairs)
+    positives, negatives, unresolved = resolve_labels(app.conn, pairs, app.user_id)
     if unresolved:
         print("Warning: unresolved labels:")
         for item in unresolved:
@@ -37,9 +37,9 @@ def run_judge(app: StudyLink) -> int:
     to_judge = []
     for bucket, relevant in ((positives, True), (negatives, False)):
         for assignment_id, note_ids in bucket.items():
-            assignment = store.get_assignment(app.conn, assignment_id)
+            assignment = store.get_assignment(app.conn, assignment_id, app.user_id)
             for note_id in note_ids:
-                note = store.get_note(app.conn, note_id)
+                note = store.get_note(app.conn, note_id, app.user_id)
                 if assignment and note:
                     hand_labels[(assignment_id, note_id)] = relevant
                     to_judge.append((assignment, note))
@@ -63,8 +63,8 @@ def run_judge(app: StudyLink) -> int:
     if result["disagreements"]:
         print("\ndisagreements (worth reading -- some will be your labels being wrong):")
         for item in result["disagreements"]:
-            note = store.get_note(app.conn, item["note_id"])
-            assignment = store.get_assignment(app.conn, item["assignment_id"])
+            note = store.get_note(app.conn, item["note_id"], app.user_id)
+            assignment = store.get_assignment(app.conn, item["assignment_id"], app.user_id)
             print(
                 f"  {assignment.name[:40] if assignment else item['assignment_id']!r}"
                 f" <- {note.title[:40] if note else item['note_id']!r}"
@@ -79,12 +79,21 @@ def main() -> int:
     parser.add_argument("--judge", action="store_true", help="Validate the LLM judge against hand labels")
     parser.add_argument("--top-k", type=int, default=None, help="Override top_k")
     parser.add_argument("--json", type=Path, default=None, help="Write results as JSON")
+    parser.add_argument("--cohort-id", type=int, help="Include one cohort's already-indexed shared notes")
+    parser.add_argument("--user-id", type=int, help="Local evaluation identity (requires database access)")
     args = parser.parse_args()
+    if args.cohort_id is not None and (args.sweep or args.judge):
+        parser.error("--cohort-id is supported for ranking evaluation, not --sweep or --judge")
 
     settings = load_settings()
     app = StudyLink(settings)
+    if args.user_id is not None:
+        from studylink.context import UserContext
+        if store.get_user(app.conn, args.user_id) is None:
+            parser.error("Unknown --user-id")
+        app.user = UserContext(user_id=args.user_id)
 
-    if app.status().notes == 0:
+    if args.cohort_id is None and app.status().notes == 0:
         print("No notes in the database. Run: python scripts/seed_demo.py")
         return 1
 
@@ -110,7 +119,9 @@ def main() -> int:
             print(f"\nWrote {args.json}")
         return 0
 
-    report = app.evaluate()
+    from studylink.evaluation.runner import evaluate_config
+    report = evaluate_config(app.conn, app.provider, app.config, settings.labels_path,
+                             app.user_id, cohort_id=args.cohort_id)
     print(format_report(report))
     if args.json:
         args.json.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")

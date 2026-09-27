@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { auth, setUnauthorizedHandler, getToken, setToken, type User } from "./api";
 import { AuthPage } from "./pages/Auth";
+import { CohortsPage } from "./pages/Cohorts";
 import { ChatPage } from "./pages/Chat";
 import { NotesPage } from "./pages/Notes";
 import { StudyPage } from "./pages/Study";
@@ -27,6 +28,7 @@ const TITLES: Record<Screen, string> = {
   discover: "Find a deck",
   community: "moot community",
   settings: "Settings",
+  cohorts: "Cohorts",
 };
 
 /**
@@ -44,7 +46,9 @@ function sharedSlug(): string | null {
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
-  const [screen, setScreen] = useState<Screen>("home");
+  const invite = new URLSearchParams(window.location.search).get("cohort_invite") ?? "";
+  const [screen, setScreen] = useState<Screen>(invite ? "cohorts" : "home");
+  const [chatCohort, setChatCohort] = useState<number | null>(null);
   // A question typed into Mooty on the hub, handed to the chat to send itself.
   const [asked, setAsked] = useState("");
   const [theme, setTheme] = useState(
@@ -85,6 +89,7 @@ export function App() {
 
   function go(to: Destination) {
     setAsked("");
+    setChatCohort(null);
     setScreen(to);
   }
 
@@ -141,15 +146,16 @@ export function App() {
         </header>
 
         {screen === "chat" ? (
-          <ChatPage initialQuestion={asked} />
+          <ChatPage initialQuestion={asked} initialCohort={chatCohort} />
         ) : (
           <div className="content">
             {screen === "home" ? (
               <HomePage
                 onGo={go}
-                onAsk={(question) => { setAsked(question); setScreen("chat"); }}
+                onAsk={(question) => { setAsked(question); setChatCohort(null); setScreen("chat"); }}
               />
             ) : null}
+            {screen === "cohorts" ? <CohortsPage invite={invite} onAsk={id => { setAsked(""); setChatCohort(id); setScreen("chat"); }} /> : null}
             {screen === "study" ? <StudyPage /> : null}
             {screen === "notes" ? <NotesPage /> : null}
             {screen === "test" ? <TestMenuPage /> : null}

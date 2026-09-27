@@ -60,7 +60,7 @@ def load_labels(path: Path) -> list[LabeledPair]:
 
 
 def resolve_labels(
-    conn: Connection, pairs: list[LabeledPair], user_id: int
+    conn: Connection, pairs: list[LabeledPair], user_id: int, cohort_id: int | None = None
 ) -> tuple[dict[int, set[int]], dict[int, set[int]], list[str]]:
     """Map title-keyed labels onto database ids.
 
@@ -70,7 +70,18 @@ def resolve_labels(
     how you end up trusting a metric computed over three pairs.
     """
     assignments = {a.name.strip().lower(): a.id for a in store.list_assignments(conn, user_id)}
-    notes = {n.title.strip().lower(): n.id for n in store.list_notes(conn, user_id)}
+    from .. import cohorts
+    visible = (cohorts.readable_notes(conn, user_id, cohort_id) if cohort_id is not None
+               else store.list_notes(conn, user_id))
+    notes = {}
+    ambiguous = set()
+    for note in visible:
+        key = note.title.strip().lower()
+        if key in notes:
+            ambiguous.add(key)
+        notes[key] = note.id
+    for key in ambiguous:
+        notes.pop(key)  # Never silently pick one contributor for an ambiguous label.
 
     positives: dict[int, set[int]] = {}
     negatives: dict[int, set[int]] = {}

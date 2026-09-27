@@ -24,7 +24,7 @@ import {
  */
 
 export type Destination =
-  | "study" | "notes" | "test" | "chat" | "match" | "discover" | "community";
+  | "study" | "notes" | "test" | "chat" | "match" | "discover" | "community" | "cohorts";
 
 interface Tile {
   id: Destination;
@@ -35,6 +35,7 @@ interface Tile {
 }
 
 const TILES: Tile[] = [
+  { id: "cohorts", title: "Class cohorts", blurb: "Pool notes with your class. Choose what to share and see who contributed.", icon: IconNotes },
   {
     id: "study",
     title: "Flashcards",

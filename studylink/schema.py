@@ -287,6 +287,27 @@ folders = Table(
 )
 
 
+cohorts = Table(
+    "cohorts", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(120), nullable=False),
+    Column("term", String(80), nullable=False),
+    Column("invite_code", String(64), nullable=False, unique=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+cohort_memberships = Table(
+    "cohort_memberships", metadata,
+    Column("cohort_id", Integer, ForeignKey("cohorts.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True),
+    Column("role", String(16), nullable=False, server_default="member"),
+    Column("status", String(16), nullable=False, server_default="active"),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("role IN ('member', 'instructor')", name="role"),
+    CheckConstraint("status IN ('active', 'left', 'removed')", name="status"),
+)
+
+
 notes = Table(
     "notes",
     metadata,
@@ -296,6 +317,10 @@ notes = Table(
     # SET NULL, not CASCADE. Deleting a folder is a filing decision; it must
     # never be a way to lose a semester of notes by accident.
     Column("folder_id", Integer, ForeignKey("folders.id", ondelete="SET NULL"), index=True),
+    Column("visibility", String(16), nullable=False, server_default="private"),
+    Column("shared_cohort_id", Integer, ForeignKey("cohorts.id"), index=True),
+    CheckConstraint("(visibility = 'private' AND shared_cohort_id IS NULL) OR "
+                    "(visibility = 'cohort' AND shared_cohort_id IS NOT NULL)", name="sharing"),
     Column("title", Text, nullable=False),
     Column("body", Text, nullable=False),
     Column("source_type", String(32), nullable=False, default="note"),

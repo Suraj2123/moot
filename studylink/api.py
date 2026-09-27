@@ -50,14 +50,14 @@ from . import preflight
 from . import usage as usage_module
 from . import ratelimit
 from . import sessions as sessions_module
-from .agent import AgentUnavailable, citation_coverage
+from .agent import AgentUnavailable, citation_coverage, resolve_citations
 from .canvas import CanvasError
 from .context import UserContext
 from .errors import CrossUserAccessError, NotFoundError
 from .config import load_settings
 from .db import create_all, make_engine
 from .pgvector_support import apply_search_tuning
-from . import store
+from . import store, cohorts
 from .service import StudyLink
 
 # Checked at import, so a misconfigured deployment fails at boot -- where the
@@ -223,6 +223,7 @@ class LoginIn(BaseModel):
 
 
 class AskIn(BaseModel):
+    cohort_id: Optional[int] = Field(default=None, gt=0)
     question: str
     history: list[dict] = Field(default_factory=list)
 
@@ -301,6 +302,7 @@ class WrittenAnswerIn(BaseModel):
 
 
 class WorkSessionIn(BaseModel):
+    cohort_id: Optional[int] = Field(default=None, gt=0)
     assignment_id: int
     mode: str = Field(default="outline", pattern="^(outline|draft|summary)$")
     top_k: Optional[int] = None
@@ -469,8 +471,10 @@ def revoke_other_sessions(
 
 
 @api.get("/auth/me")
-def me(user: UserContext = Depends(current_user)) -> dict:
+def me(user: UserContext = Depends(current_user), conn=Depends(db_connection)) -> dict:
+    profile = store.get_user(conn, user.user_id)
     return {
+        "display_name": profile["display_name"] if profile else None,
         "id": user.user_id,
         "email": user.email,
         "auth_source": user.auth_source,
@@ -778,6 +782,8 @@ def list_notes(
             "index_status": index_state(n.id),
             "folder_id": n.folder_id,
             "folder": n.folder_name,
+            "visibility": n.visibility,
+            "shared_cohort_id": n.shared_cohort_id,
         }
         for n in app.list_notes(course_id=course_id, search=search)
         # Filtering here rather than in SQL: the list is already loaded for the
@@ -857,6 +863,8 @@ def get_note(note_id: int, app: StudyLink = Depends(current_app)) -> dict:
         "course_id": note.course_id,
         "source_type": note.source_type,
         "chars": len(note.body),
+        "visibility": note.visibility,
+        "shared_cohort_id": note.shared_cohort_id,
     }
 
 
@@ -984,9 +992,16 @@ def reverse_lookup(
 
 @api.get("/search")
 def search(
-    q: str, top_k: int = 5, app: StudyLink = Depends(current_app)
+    q: str, top_k: int = 5, cohort_id: Optional[int] = None, app: StudyLink = Depends(current_app)
 ) -> list[dict]:
-    return [m.as_dict() for m in app.search_notes(q, top_k=top_k)]
+    _select_cohort(app, cohort_id)
+    return [m.as_dict() for m in app.search_notes(q, top_k=min(max(top_k, 1), 100))]
+
+
+def _select_cohort(app: StudyLink, cohort_id: Optional[int]):
+    if cohort_id is not None:
+        cohorts.require_member(app.conn, cohort_id, app.user_id)
+    app.retriever.cohort_id = cohort_id
 
 
 def _chat_for(app: StudyLink):
@@ -1012,6 +1027,7 @@ def ask(payload: AskIn, app: StudyLink = Depends(current_app)) -> dict:
     oversight.
     """
     try:
+        _select_cohort(app, payload.cohort_id)
         answer = _chat_for(app).ask(payload.question, history=payload.history)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1035,6 +1051,7 @@ def ask_stream(payload: AskIn, app: StudyLink = Depends(current_app)):
     render as if it were an answer. Everything that can be checked up front is.
     """
     try:
+        _select_cohort(app, payload.cohort_id)
         chat_bot = _chat_for(app)
         if not (payload.question or "").strip():
             raise ValueError("A question is required.")
@@ -1240,17 +1257,22 @@ def work_session(
     if assignment is None:
         raise HTTPException(status_code=404, detail="assignment not found")
 
+    _select_cohort(app, payload.cohort_id)
     matches = app.matches_for_assignment(payload.assignment_id, top_k=payload.top_k)
     if not matches:
         raise HTTPException(status_code=409, detail="no notes matched this assignment")
 
     try:
-        output, _ = app.agent().synthesize(assignment, matches, payload.mode)
+        agent = app.agent()
+        output, _ = agent.synthesize(assignment, matches, payload.mode)
     except AgentUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    matches = list(agent.supplied_matches.values())
     offered = [m.note.id for m in matches]
     return {
+        "sources": resolve_citations(app.conn, output.cited_note_ids, app.user_id,
+                                     payload.cohort_id, offered),
         "assignment_id": assignment.id,
         "mode": output.mode,
         "output": output.text,
@@ -1546,3 +1568,138 @@ def preview_outline(
 @api.get("/evaluation")
 def evaluation(app: StudyLink = Depends(current_app)) -> dict:
     return app.evaluate().as_dict()
+
+
+# ---------------------------------------------------------------------- cohorts
+
+class CohortIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    term: str = Field(min_length=1, max_length=80)
+
+
+class InviteIn(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+
+
+class ShareNoteIn(BaseModel):
+    cohort_id: Optional[int] = Field(default=None, gt=0)
+
+
+class TransferIn(BaseModel):
+    user_id: int = Field(gt=0)
+
+
+class DisplayNameIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=255)
+
+
+@api.exception_handler(cohorts.CohortError)
+async def cohort_action_error(request: Request, exc: cohorts.CohortError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@api.patch("/auth/profile")
+def update_profile(payload: DisplayNameIn, app: StudyLink = Depends(current_app)):
+    cohorts.set_display_name(app.conn, app.user_id, payload.display_name)
+    return {"display_name": payload.display_name.strip()}
+
+
+@api.get("/cohorts")
+def my_cohorts(app: StudyLink = Depends(current_app)):
+    return cohorts.list_cohorts(app.conn, app.user_id)
+
+
+@api.post("/cohorts", status_code=201)
+def create_cohort(payload: CohortIn, app: StudyLink = Depends(current_app)):
+    return cohorts.create_cohort(app.conn, app.user_id, payload.name, payload.term)
+
+
+@api.post("/cohort-invites/preview")
+def preview_cohort_invite(payload: InviteIn, app: StudyLink = Depends(current_app)):
+    _enforce(ratelimit.LOGIN_PER_IP, f"cohort-invite:{app.user_id}")
+    return cohorts.preview_invite(app.conn, app.user_id, payload.code)
+
+
+@api.post("/cohort-invites/join")
+def join_cohort(payload: InviteIn, app: StudyLink = Depends(current_app)):
+    _enforce(ratelimit.LOGIN_PER_IP, f"cohort-invite:{app.user_id}")
+    return cohorts.join_cohort(app.conn, app.user_id, payload.code)
+
+
+@api.get("/cohorts/{cohort_id}")
+def get_cohort(cohort_id: int, app: StudyLink = Depends(current_app)):
+    return cohorts.get_cohort(app.conn, cohort_id, app.user_id)
+
+
+@api.post("/cohorts/{cohort_id}/invite")
+def rotate_cohort_invite(cohort_id: int, app: StudyLink = Depends(current_app)):
+    return cohorts.rotate_invite(app.conn, cohort_id, app.user_id)
+
+
+@api.get("/cohorts/{cohort_id}/members")
+def cohort_members(cohort_id: int, app: StudyLink = Depends(current_app)):
+    return cohorts.list_members(app.conn, cohort_id, app.user_id)
+
+
+@api.delete("/cohorts/{cohort_id}/members/{member_id}", status_code=204)
+def remove_cohort_member(cohort_id: int, member_id: int, app: StudyLink = Depends(current_app)):
+    cohorts.remove_member(app.conn, cohort_id, app.user_id, member_id)
+    return Response(status_code=204)
+
+
+@api.post("/cohorts/{cohort_id}/transfer", status_code=204)
+def transfer_cohort(cohort_id: int, payload: TransferIn, app: StudyLink = Depends(current_app)):
+    cohorts.transfer_admin(app.conn, cohort_id, app.user_id, payload.user_id)
+    return Response(status_code=204)
+
+
+@api.delete("/cohorts/{cohort_id}/membership", status_code=204)
+def leave_cohort(cohort_id: int, app: StudyLink = Depends(current_app)):
+    cohorts.remove_member(app.conn, cohort_id, app.user_id, app.user_id)
+    return Response(status_code=204)
+
+
+@api.patch("/notes/{note_id}/sharing")
+def share_note(note_id: int, payload: ShareNoteIn, app: StudyLink = Depends(current_app)):
+    cohorts.share_note_to_cohort(app.conn, note_id, app.user_id, payload.cohort_id)
+    if payload.cohort_id is not None:
+        try:
+            app.catch_up_index()
+        except Exception:
+            # Sharing is committed independently from the embedding service.
+            # The existing owner indexing job can retry; do not tell the client
+            # the privacy change failed when it has already succeeded.
+            app.conn.rollback()
+            logger.exception("Shared note indexing deferred to the owner job")
+    return {"visibility": "private" if payload.cohort_id is None else "cohort",
+            "shared_cohort_id": payload.cohort_id}
+
+
+def _shared_note_payload(note, app: StudyLink, *, body: bool):
+    from .schema import chunks, embeddings
+    from sqlalchemy import select
+    ready = app.conn.execute(select(chunks.c.id).join(embeddings,
+        (embeddings.c.owner_type == "chunk") & (embeddings.c.owner_id == chunks.c.id)
+    ).where(chunks.c.note_id == note.id, embeddings.c.model == app.provider.name).limit(1)).first()
+    result = {"id": note.id, "title": note.title, "contributor_name": note.contributor_name,
+              "cohort_id": note.shared_cohort_id, "index_status": "ready" if ready else "pending"}
+    if body:
+        result["body"] = note.body
+    return result
+
+
+@api.get("/cohorts/{cohort_id}/notes")
+def cohort_notes(cohort_id: int, app: StudyLink = Depends(current_app)):
+    return [_shared_note_payload(n, app, body=False)
+            for n in cohorts.list_cohort_notes(app.conn, cohort_id, app.user_id)]
+
+
+@api.get("/cohorts/{cohort_id}/notes/{note_id}")
+def shared_note(cohort_id: int, note_id: int, app: StudyLink = Depends(current_app)):
+    return _shared_note_payload(cohorts.get_shared_note(app.conn, cohort_id, note_id, app.user_id), app, body=True)
+
+
+@api.delete("/cohorts/{cohort_id}/notes/{note_id}", status_code=204)
+def moderate_cohort_note(cohort_id: int, note_id: int, app: StudyLink = Depends(current_app)):
+    cohorts.moderate_note(app.conn, cohort_id, note_id, app.user_id)
+    return Response(status_code=204)
