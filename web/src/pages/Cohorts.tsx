@@ -17,7 +17,7 @@ export function CohortsPage({ invite = "", onAsk }: { invite?: string; onAsk: (c
   async function act(work: () => Promise<void>) {
     setBusy(true); setError(""); try { await work(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  return <div className="content-inner">
+  return <div className="content-inner cohorts-space">
     <div className="page-head"><h1>Learn together, share deliberately.</h1><p>Pool notes with your class. Your library stays private until you choose a note to share.</p></div>
     {error && <Alert>{error}</Alert>}
     <div className="cohort-layout">
@@ -43,6 +43,7 @@ export function CohortsPage({ invite = "", onAsk }: { invite?: string; onAsk: (c
       </aside>
       <section>{selected ? <CohortDetail key={selected} id={selected} onAsk={onAsk} onChanged={load} onLeft={() => { setSelected(null); load(); }} /> : <Empty title="A shared space for one class"><p>Select a cohort to browse notes and members. Share your own notes from Notes and folders.</p></Empty>}</section>
     </div>
+    <p className="cohorts-footnote">Class cohorts will become a separate app soon.</p>
   </div>;
 }
 

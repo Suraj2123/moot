@@ -5,24 +5,7 @@ import {
   IconAssignments, IconCards, IconChat, IconNotes, IconSearch, IconUpload,
 } from "../components/Icons";
 
-/**
- * The central menu.
- *
- * Replaces the sidebar as the way into everything. A permanent nav rail is
- * right for an app someone lives inside all day; this is one people open with
- * a specific job -- revise these cards, file these notes, ask about this
- * topic -- and a hub asks what the job is instead of showing six answers at
- * once and making them read all six.
- *
- * The tiles carry live counts. "Flashcards" is a label; "Flashcards · 3 decks,
- * 12 due" is a reason to press it, and it is the same query the page behind it
- * runs anyway.
- *
- * Mooty sits at the bottom on purpose. It is the answer to "I do not know
- * where to start", which is a thing you conclude *after* reading the tiles and
- * finding that none of them is obviously the thing you wanted.
- */
-
+/** Personal study tools, with Mooty always available below the grid. */
 export type Destination =
   | "study" | "notes" | "test" | "chat" | "match" | "discover" | "community" | "cohorts";
 
@@ -35,7 +18,6 @@ interface Tile {
 }
 
 const TILES: Tile[] = [
-  { id: "cohorts", title: "Class cohorts", blurb: "Pool notes with your class. Choose what to share and see who contributed.", icon: IconNotes },
   {
     id: "study",
     title: "Flashcards",
@@ -61,12 +43,6 @@ const TILES: Tile[] = [
     icon: IconSearch,
   },
   {
-    id: "chat",
-    title: "Ask Mooty",
-    blurb: "Questions answered from your own notes, with citations.",
-    icon: IconChat,
-  },
-  {
     id: "discover",
     title: "Find a deck",
     blurb: "Search decks other people published, and copy one.",
@@ -76,7 +52,7 @@ const TILES: Tile[] = [
     id: "community",
     title: "moot community",
     blurb:
-      "Coming soon. A place to publish notes, quizzes, and flashcards on any topic, so anyone studying it can use them instead of starting over.",
+      "Share notes, quizzes, and flashcards with fellow learners.",
     icon: IconChat,
     soon: true,
   },
@@ -142,31 +118,33 @@ export function HomePage({
         ))}
       </div>
 
-      {/* The bottom of the page, because "I don't know where to start" is what
-          you conclude after reading the tiles rather than before. */}
-      <form
-        className="mooty"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (question.trim()) onAsk(question.trim());
-        }}
-      >
-        <span className="mooty-mark">m</span>
-        <input
-          className="input mooty-input"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Not sure where to start? Ask Mooty — “what should I revise for Friday?”"
-          aria-label="Ask Mooty"
-        />
-        <button className="btn btn-primary btn-sm" type="submit" disabled={!question.trim()}>
-          Ask
-        </button>
-      </form>
-      <p className="mooty-note small faint">
-        Mooty answers from your own notes and says so when they do not cover
-        something, rather than guessing.
-      </p>
+      <div className="mooty-dock">
+        <label className="mooty-label" htmlFor="home-mooty">Ask Mooty</label>
+        <form
+          className="mooty"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (question.trim()) onAsk(question.trim());
+          }}
+        >
+          <span className="mooty-mark">m</span>
+          <input
+            id="home-mooty"
+            className="input mooty-input"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="What should I revise? Ask about your notes…"
+            aria-label="Ask Mooty"
+          />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={!question.trim()}>
+            Ask
+          </button>
+        </form>
+        <p className="mooty-note small faint">
+          Mooty answers from your own notes and says so when they do not cover
+          something, rather than guessing.
+        </p>
+      </div>
     </div>
   );
 }

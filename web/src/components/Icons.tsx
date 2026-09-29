@@ -41,3 +41,7 @@ export const IconUpload = () => (
 export const IconMoon = () => (
   <svg {...base}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
 );
+
+export const IconCohorts = () => (
+  <svg {...base}><circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5.65" /></svg>
+);

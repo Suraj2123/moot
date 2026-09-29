@@ -13,7 +13,7 @@ import { DiscoverPage } from "./pages/Discover";
 import { CommunityPage } from "./pages/Community";
 import { HomePage, type Destination } from "./pages/Home";
 import { Wordmark } from "./components/Wordmark";
-import { IconMoon, IconSettings, IconSun } from "./components/Icons";
+import { IconMoon, IconSettings, IconSun, IconCohorts } from "./components/Icons";
 import { Spinner } from "./components/ui";
 
 type Screen = "home" | Destination | "settings";
@@ -28,7 +28,7 @@ const TITLES: Record<Screen, string> = {
   discover: "Find a deck",
   community: "moot community",
   settings: "Settings",
-  cohorts: "Cohorts",
+  cohorts: "Class cohorts",
 };
 
 /**
@@ -87,7 +87,7 @@ export function App() {
 
   if (!user) return <AuthPage onSignedIn={setUser} />;
 
-  function go(to: Destination) {
+  function go(to: Screen) {
     setAsked("");
     setChatCohort(null);
     setScreen(to);
@@ -95,18 +95,25 @@ export function App() {
 
   return (
     <div className="shell">
-      {/* Icon-only, and as narrow as a touch target allows. Everything you
-          navigate to lives on the hub; what is left here is the two things
-          that are never the reason you opened the app -- settings, and the
-          account they belong to. */}
       <nav className="rail">
         <button
           className="rail-home"
-          onClick={() => go("home" as Destination)}
+          onClick={() => go("home")}
           title="moot — home"
           aria-label="Home"
         >
           m
+        </button>
+
+        <button
+          className={`rail-btn rail-cohorts${screen === "cohorts" ? " active" : ""}`}
+          onClick={() => go("cohorts")}
+          title="Class cohorts"
+          aria-label="Class cohorts"
+          aria-current={screen === "cohorts" ? "page" : undefined}
+        >
+          <IconCohorts />
+          <span>Cohorts</span>
         </button>
 
         <div className="rail-spacer" />
@@ -148,7 +155,7 @@ export function App() {
         {screen === "chat" ? (
           <ChatPage initialQuestion={asked} initialCohort={chatCohort} />
         ) : (
-          <div className="content">
+          <div className={`content${screen === "home" ? " content-home" : ""}`}>
             {screen === "home" ? (
               <HomePage
                 onGo={go}

@@ -754,9 +754,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 /* ------------------------------------------------------------------- rail */
 
-/* As narrow as a comfortable touch target and no narrower. Everything you
- * navigate to lives on the hub; what is left here is the two things that are
- * never the reason you opened the app. */
+/* Persistent navigation between personal study and class cohorts. */
 .rail {
   width: var(--rail-w);
   flex: 0 0 var(--rail-w);
@@ -795,16 +793,17 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 /* -------------------------------------------------------------------- hub */
 
-.hub { max-width: 760px; margin: 0 auto; padding-top: 18px; }
-.hub-head { text-align: center; margin-bottom: 34px; }
-.hub-head p { margin: 18px 0 0; color: var(--text-muted); font-size: 14.5px; }
+.content.content-home { min-height: 0; overflow: hidden; padding: 20px 30px 16px; }
+.hub { max-width: 1100px; height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
+.hub-head { text-align: center; margin-bottom: 18px; flex-shrink: 0; }
+.hub-head p { margin: 8px 0 0; color: var(--text-muted); font-size: 14.5px; }
 
-.tiles { display: grid; gap: 10px; }
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding: 2px; }
 
 .tile {
-  display: flex; align-items: flex-start; gap: 14px;
-  width: 100%; text-align: left;
-  padding: 16px 18px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  width: 100%; min-height: 166px; text-align: left;
+  padding: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-raised);
@@ -823,12 +822,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .tile:hover .tile-icon { color: var(--accent); }
 .tile-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .tile-title {
-  font-weight: 600; font-size: 14.5px; letter-spacing: -0.015em;
-  display: flex; align-items: center; gap: 9px;
+  font-weight: 600; font-size: 17px; letter-spacing: -0.015em;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 9px;
 }
 .tile-blurb { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
 .tile-count {
-  flex: 0 0 auto; align-self: center;
+  flex: 0 0 auto; align-self: flex-start;
   color: var(--text-faint); font-size: 12.5px; white-space: nowrap;
 }
 
@@ -842,7 +841,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 .mooty {
   display: flex; align-items: center; gap: 10px;
-  margin-top: 28px; padding: 9px 10px 9px 12px;
+  margin-top: 8px; padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--bg-raised);
@@ -941,4 +940,30 @@ button.citation { border: 0; }
   .cohort-scope { padding: 10px 16px; gap: 6px; }
   .cohort-card .row { flex-wrap: wrap; }
   .source-dialog { padding: 16px; }
+}
+
+.rail-cohorts { width: 44px; height: 52px; margin-top: 10px; gap: 3px; align-content: center; }
+.rail-cohorts span { font-size: 10px; font-weight: 600; }
+.rail-cohorts svg, .tile-icon svg { width: 22px; height: 22px; }
+.mooty-dock { flex-shrink: 0; padding-top: 14px; background: var(--bg); }
+.mooty-label { font-size: 14px; font-weight: 600; margin-left: 4px; }
+.cohorts-space { min-height: 100%; display: flex; flex-direction: column; }
+.cohorts-footnote { margin: auto 0 0; padding-top: 32px; text-align: center; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 950px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .content.content-home { padding: 12px 12px max(12px, env(safe-area-inset-bottom)); }
+  .hub-head { margin-bottom: 12px; }
+  .tile { padding: 16px; min-height: 154px; }
+  .tile-title { font-size: 15px; }
+  .mooty-note { font-size: 11px; margin-top: 6px; }
+}
+@media (max-width: 420px) {
+  .tiles { grid-template-columns: 1fr; }
+}
+@media (max-height: 700px) {
+  .hub-head svg { max-height: 38px; }
+  .tile { min-height: 140px; padding: 14px; gap: 6px; }
+  .mooty-dock { padding-top: 8px; }
 }
