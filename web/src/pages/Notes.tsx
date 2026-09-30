@@ -8,7 +8,7 @@ import { ShareNoteControl } from "../components/CohortControls";
 import { OutlineEditor } from "../components/OutlineEditor";
 import { IconPlus, IconSearch, IconUpload } from "../components/Icons";
 
-export function NotesPage() {
+export function NotesPage({ initialNoteId = null }: { initialNoteId?: number | null }) {
   const [cohortList, setCohortList] = useState<Cohort[]>([]);
   useEffect(() => { cohorts.list().then(setCohortList).catch(() => setError("Could not load cohorts. Refresh to manage sharing.")); }, []);
   const [items, setItems] = useState<Note[] | null>(null);
@@ -17,7 +17,7 @@ export function NotesPage() {
   const [composing, setComposing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [editing, setEditing] = useState<number | null>(initialNoteId);
   const [deleting, setDeleting] = useState<number | null>(null);
   // null is "everything"; a number is one folder; "unfiled" is the notes that
   // are in none. Three states, because "unfiled" is a place people look.

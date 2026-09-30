@@ -13,19 +13,19 @@ import { SharedDeckPage } from "./pages/SharedDeck";
 import { DiscoverPage } from "./pages/Discover";
 import { CommunityPage } from "./pages/Community";
 import { HomePage, type Destination } from "./pages/Home";
-import { Wordmark } from "./components/Wordmark";
-import { IconMoon, IconSettings, IconSun, IconCohorts } from "./components/Icons";
+
+import { IconMenu, IconSettings, IconCohorts, IconNotes, IconCards, IconAssignments, IconSearch, IconChat } from "./components/Icons";
 import { Spinner } from "./components/ui";
 
 type Screen = "home" | Destination | "settings";
 
 const TITLES: Record<Screen, string> = {
-  home: "moot",
+  home: "Overview",
   study: "Flashcards",
   notes: "Notes",
   test: "Practice test",
   match: "Match",
-  chat: "Ask Mooty",
+  chat: "Ask Moot",
   discover: "Find a deck",
   community: "moot community",
   settings: "Settings",
@@ -53,6 +53,8 @@ export function App() {
   const [chatCohort, setChatCohort] = useState<number | null>(null);
   // A question typed into Mooty on the hub, handed to the chat to send itself.
   const [asked, setAsked] = useState("");
+  const [selectedNote, setSelectedNote] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState(
     () => localStorage.getItem("studylink.theme") ?? "dark"
   );
@@ -65,7 +67,7 @@ export function App() {
   // A stored token may have expired while the tab was closed, so it is
   // validated once on boot rather than trusted. One place, one decision.
   useEffect(() => {
-    setUnauthorizedHandler(() => setUser(null));
+    setUnauthorizedHandler(() => resetSession(false));
     if (!getToken()) { setChecking(false); return; }
     auth.me()
       .then(setUser)
@@ -95,69 +97,60 @@ export function App() {
     return <LandingPage onAuthenticate={setAuthMode} />;
   }
 
+  function resetSession(returnToLanding = true) {
+    setToken(null);
+    setUser(null);
+    setSelectedNote(null);
+    setAsked("");
+    setChatCohort(null);
+    if (returnToLanding) setAuthMode(null);
+    setScreen(invite ? "cohorts" : "home");
+    setMenuOpen(false);
+  }
+
   function go(to: Screen) {
+    setMenuOpen(false);
+    setSelectedNote(null);
     setAsked("");
     setChatCohort(null);
     setScreen(to);
   }
 
   return (
-    <div className="shell">
-      <nav className="rail">
-        <button
-          className="rail-home"
-          onClick={() => go("home")}
-          title="moot — home"
-          aria-label="Home"
-        >
-          m
+    <div className="shell workspace">
+      <aside className={`workspace-sidebar${menuOpen ? " is-open" : ""}`} id="workspace-navigation">
+        <button className="workspace-brand" onClick={() => go("home")} aria-label="Moot home">
+          <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 7v18M7 11l18 10M7 21l18-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/><path d="m12 3 4 4 4-4M12 29l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          moot<span>.</span>
         </button>
-
-        <button
-          className={`rail-btn rail-cohorts${screen === "cohorts" ? " active" : ""}`}
-          onClick={() => go("cohorts")}
-          title="Class cohorts"
-          aria-label="Class cohorts"
-          aria-current={screen === "cohorts" ? "page" : undefined}
-        >
-          <IconCohorts />
-          <span>Cohorts</span>
-        </button>
-
-        <div className="rail-spacer" />
-
-        <button
-          className={`rail-btn${screen === "settings" ? " active" : ""}`}
-          onClick={() => setScreen("settings")}
-          title="Settings and account"
-          aria-label="Settings and account"
-        >
-          <IconSettings />
-        </button>
-        <button
-          className="rail-btn"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          title={theme === "dark" ? "Light mode" : "Dark mode"}
-          aria-label={theme === "dark" ? "Light mode" : "Dark mode"}
-        >
-          {theme === "dark" ? <IconSun /> : <IconMoon />}
-        </button>
-      </nav>
-
+        <nav aria-label="Workspace navigation" className="workspace-links">
+          <p className="workspace-label">My workspace</p>
+          {([
+            ["home", "Overview", IconNotes],
+            ["notes", "My notes", IconNotes],
+            ["chat", "Ask Moot", IconChat],
+          ] as const).map(([to, label, Icon]) => <button key={to} className={`workspace-link${screen === to ? " active" : ""}`} aria-current={screen === to ? "page" : undefined} onClick={() => go(to)}><Icon />{label}</button>)}
+          <p className="workspace-label">Study space</p>
+          {([
+            ["study", "Flashcards", IconCards],
+            ["test", "Practice tests", IconAssignments],
+            ["match", "Match my notes", IconSearch],
+            ["discover", "Find a deck", IconSearch],
+            ["cohorts", "Class cohorts", IconCohorts],
+            ["community", "Community", IconChat],
+          ] as const).map(([to, label, Icon]) => <button key={to} className={`workspace-link${screen === to ? " active" : ""}`} aria-current={screen === to ? "page" : undefined} onClick={() => go(to)}><Icon />{label}</button>)}
+        </nav>
+        <div className="workspace-account">
+          <button className={`workspace-link${screen === "settings" ? " active" : ""}`} onClick={() => go("settings")} aria-current={screen === "settings" ? "page" : undefined}><IconSettings />Settings & account</button>
+          <span className="workspace-email" title={user.email ?? undefined}>{user.email ?? "Your account"}</span>
+        </div>
+      </aside>
       <main className="main">
         <header className="topbar">
-          {screen === "home" ? (
-            <Wordmark size={19} />
-          ) : (
-            <>
-              <button className="btn btn-ghost btn-sm" onClick={() => setScreen("home")}>
-                ← Menu
-              </button>
-              <h1>{TITLES[screen]}</h1>
-            </>
-          )}
+          <button className="btn btn-ghost workspace-menu" aria-expanded={menuOpen} aria-controls="workspace-navigation" aria-label="Toggle navigation" onClick={() => setMenuOpen(!menuOpen)}><IconMenu /></button>
+          <span className="workspace-breadcrumb">My workspace <span>/</span> {TITLES[screen]}</span>
           <div className="spacer" />
-          <span className="small faint topbar-user">{user.email}</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => go("settings")}><IconSettings /><span>Settings</span></button>
         </header>
 
         {screen === "chat" ? (
@@ -167,12 +160,13 @@ export function App() {
             {screen === "home" ? (
               <HomePage
                 onGo={go}
+                onOpenNote={(id) => { go("notes"); setSelectedNote(id); }}
                 onAsk={(question) => { setAsked(question); setChatCohort(null); setScreen("chat"); }}
               />
             ) : null}
             {screen === "cohorts" ? <CohortsPage invite={invite} onAsk={id => { setAsked(""); setChatCohort(id); setScreen("chat"); }} /> : null}
             {screen === "study" ? <StudyPage /> : null}
-            {screen === "notes" ? <NotesPage /> : null}
+            {screen === "notes" ? <NotesPage initialNoteId={selectedNote} /> : null}
             {screen === "test" ? <TestMenuPage /> : null}
             {screen === "match" ? <AssignmentsPage /> : null}
             {screen === "discover" ? <DiscoverPage /> : null}
@@ -181,9 +175,10 @@ export function App() {
             ) : null}
             {screen === "settings" ? (
               <SettingsPage
+                email={user.email ?? "No email on this account"}
                 theme={theme}
                 onThemeChange={setTheme}
-                onSignedOut={() => { setUser(null); setScreen("home"); }}
+                onSignedOut={resetSession}
               />
             ) : null}
           </div>

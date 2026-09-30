@@ -55,7 +55,7 @@ function Prose({ text, answer, sources, onSource }: { text: string; answer?: Ans
 }
 
 /**
- * `initialQuestion` is what somebody typed into Mooty on the hub. It is sent
+ * `initialQuestion` is what somebody typed into Moot on the hub. It is sent
  * once, on mount, rather than dropped into the composer for them to press
  * enter on again -- they already pressed enter.
  */
@@ -154,10 +154,10 @@ function ChatConversation({ initialQuestion, scope, onScope }: { initialQuestion
           {turns.length === 0 ? (
             <div style={{ paddingTop: 40 }}>
               <h1 style={{ fontFamily: "var(--font-prose)", fontSize: 30, marginBottom: 8 }}>
-                Ask Mooty
+                Ask Moot
               </h1>
               <p className="muted" style={{ marginTop: 0, maxWidth: 460 }}>
-                Mooty answers from your notes{scope ? " and this cohort’s shared notes" : ""}, with a source for each claim. If your notes do not cover it, it says so rather than guessing.
+                Moot answers from your notes{scope ? " and this cohort’s shared notes" : ""}, with a source for each claim. If your notes do not cover it, it says so rather than guessing.
               </p>
               <div className="stack" style={{ marginTop: 22, maxWidth: 460 }}>
                 {SUGGESTIONS.map((s) => (
@@ -220,7 +220,7 @@ function ChatConversation({ initialQuestion, scope, onScope }: { initialQuestion
         <div className="composer-inner">
           <textarea
             className="textarea"
-            placeholder="Ask Mooty about your notes…"
+            placeholder="Ask Moot about your notes…"
             value={question}
             rows={1}
             disabled={busy}

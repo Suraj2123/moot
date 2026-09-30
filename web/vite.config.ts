@@ -17,7 +17,7 @@ export default defineConfig({
     // same way as dev.
     proxy: Object.fromEntries(
       [
-        "/auth", "/notes", "/courses", "/assignments", "/search", "/ask",
+        "/auth", "/notes", "/folders", "/courses", "/assignments", "/search", "/ask",
         "/canvas", "/jobs", "/sync", "/reindex", "/usage", "/health",
         "/evaluation", "/work-session",
         // Added later than the list above, and each one was invisible in dev

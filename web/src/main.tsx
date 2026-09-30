@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import "./workspace.css";
 
 // Theme is applied before first paint so a reload does not flash the wrong one.
 const stored = localStorage.getItem("studylink.theme");

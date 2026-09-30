@@ -7,24 +7,25 @@ import {
 import { Alert, JobBadge, Ago, Spinner } from "../components/ui";
 
 interface SettingsProps {
+  email: string;
   theme: string;
   onThemeChange: (theme: string) => void;
   onSignedOut: () => void;
 }
 
-export function SettingsPage({ theme, onThemeChange, onSignedOut }: SettingsProps) {
+export function SettingsPage({ email, theme, onThemeChange, onSignedOut }: SettingsProps) {
   return (
     <div className="content-inner">
       <div className="page-head">
         <h1>Settings</h1>
-        <p>What costs money, your own API key, Canvas, and background work.</p>
+        <p>Your account, your preferences, your study space.</p>
       </div>
+      <AccountCard email={email} theme={theme} onThemeChange={onThemeChange} onSignedOut={onSignedOut} />
       <PricingCard />
       <ModelKeyCard />
       <CanvasCard />
       <UsageCard />
       <JobsCard />
-      <AccountCard theme={theme} onThemeChange={onThemeChange} onSignedOut={onSignedOut} />
     </div>
   );
 }
@@ -204,12 +205,14 @@ function JobsCard() {
   );
 }
 
-function AccountCard({ theme, onThemeChange, onSignedOut }: SettingsProps) {
+function AccountCard({ email, theme, onThemeChange, onSignedOut }: SettingsProps) {
+  const [signingOut, setSigningOut] = useState(false);
   // Theme is owned by App -- a second copy here was how the sidebar label went
   // stale after changing it from this page.
   return (
     <div className="card">
       <h2 style={{ marginBottom: 12 }}>Account</h2>
+      <p className="muted">Signed in as <strong className="account-email">{email}</strong></p>
       <div className="field">
         <label>Appearance</label>
         <div className="row">
@@ -226,9 +229,14 @@ function AccountCard({ theme, onThemeChange, onSignedOut }: SettingsProps) {
       </div>
       <button
         className="btn btn-danger"
-        onClick={async () => { try { await auth.logout(); } finally { setToken(null); onSignedOut(); } }}
+        disabled={signingOut}
+        onClick={async () => {
+          setSigningOut(true);
+          try { await auth.logout(); } catch { /* Local sign-out must work offline too. */ }
+          finally { setToken(null); onSignedOut(); }
+        }}
       >
-        Sign out
+        {signingOut ? "Signing out…" : "Sign out"}
       </button>
     </div>
   );
