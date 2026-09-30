@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { auth, setUnauthorizedHandler, getToken, setToken, type User } from "./api";
 import { AuthPage } from "./pages/Auth";
+import { LandingPage } from "./pages/Landing";
 import { CohortsPage } from "./pages/Cohorts";
 import { ChatPage } from "./pages/Chat";
 import { NotesPage } from "./pages/Notes";
@@ -46,6 +47,7 @@ function sharedSlug(): string | null {
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
+  const [authMode, setAuthMode] = useState<"login" | "signup" | null>(null);
   const invite = new URLSearchParams(window.location.search).get("cohort_invite") ?? "";
   const [screen, setScreen] = useState<Screen>(invite ? "cohorts" : "home");
   const [chatCohort, setChatCohort] = useState<number | null>(null);
@@ -85,7 +87,13 @@ export function App() {
     );
   }
 
-  if (!user) return <AuthPage onSignedIn={setUser} />;
+  if (!user) {
+    if (invite || authMode) {
+      return <AuthPage initialMode={authMode ?? "login"} onSignedIn={setUser}
+        onBack={invite ? undefined : () => setAuthMode(null)} />;
+    }
+    return <LandingPage onAuthenticate={setAuthMode} />;
+  }
 
   function go(to: Screen) {
     setAsked("");

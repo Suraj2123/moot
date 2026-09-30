@@ -3,8 +3,12 @@ import { auth, setToken, ApiError, type User } from "../api";
 import { Alert, Spinner } from "../components/ui";
 import { Wordmark } from "../components/Wordmark";
 
-export function AuthPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+export function AuthPage({ onSignedIn, initialMode = "login", onBack }: {
+  onSignedIn: (user: User) => void;
+  initialMode?: "login" | "signup";
+  onBack?: () => void;
+}) {
+  const [mode, setMode] = useState<"login" | "signup">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -33,6 +37,7 @@ export function AuthPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        {onBack ? <button className="btn btn-ghost btn-sm" style={{ marginBottom: 24 }} onClick={onBack}>← Back to Moot</button> : null}
         {/* The logo at full size, because this is the one screen where moot
             has to introduce itself rather than get out of the way. */}
         <div className="auth-brand">
